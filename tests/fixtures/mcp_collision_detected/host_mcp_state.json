@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "existing": {
+      "tools": [
+        {
+          "name": "agentic_deep_audit_audit_query"
+        }
+      ],
+      "resources": ["docs"],
+      "prompts": ["triage"]
+    }
+  }
+}

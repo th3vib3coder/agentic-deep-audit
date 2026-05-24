@@ -1,0 +1,33 @@
+{
+  "adapter_id": "graphify",
+  "command_readonly": "graphify --version",
+  "decision": "defer",
+  "decision_date": "2026-05-23",
+  "fallback": "canonical graph JSON and built-in graph renderer",
+  "installability": {
+    "notes": "Deferred until a read-only fixture run is reviewed.",
+    "os": [
+      "Windows",
+      "Linux",
+      "macOS"
+    ]
+  },
+  "license": {
+    "compatible_with_target_context": false,
+    "spdx": "UNKNOWN"
+  },
+  "policy_applied": [
+    "no-exec",
+    "read-only",
+    "path-containment"
+  ],
+  "reviewer": "pending-independent-review",
+  "schema_output_observed": {
+    "hash": "pending",
+    "sample_path": "pending"
+  },
+  "version_pinning": {
+    "min_version": null,
+    "strategy": "system"
+  }
+}

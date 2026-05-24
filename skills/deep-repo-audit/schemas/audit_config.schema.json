@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Audit Config",
+  "type": "object",
+  "required": ["schema_version", "repo", "profile", "mode", "output_dir", "target_context", "binary_triage_consent"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "repo": {
+      "type": "object",
+      "required": ["kind", "path", "github"],
+      "properties": {
+        "kind": {"enum": ["local", "github"]},
+        "path": {"type": ["string", "null"]},
+        "github": {"type": ["string", "null"]}
+      }
+    },
+    "profile": {"enum": ["minimal", "standard", "extended", "research"]},
+    "mode": {"enum": ["source-audit", "binary-triage"]},
+    "output_dir": {"type": "string"},
+    "scope_filters": {"type": "object"},
+    "network_policy_file": {"type": ["string", "null"]},
+    "mcp_config": {"type": ["object", "null"]},
+    "blocked_tools": {"type": "array", "items": {"type": "string"}},
+    "blocked_commands_file": {"type": "string"},
+    "target_context": {"type": ["string", "object"]},
+    "binary_triage_consent": {"type": "boolean"},
+    "graph": {"type": "object"},
+    "security": {"type": "object"}
+  }
+}

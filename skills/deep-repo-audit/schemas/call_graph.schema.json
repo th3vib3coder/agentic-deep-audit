@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Call Graph",
+  "type": "object",
+  "required": ["schema_version", "nodes", "edges", "coverage"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "label", "path"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["symbol", "external"]},
+          "label": {"type": "string"},
+          "path": {"type": ["string", "null"]},
+          "evidence_ids": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["caller", "callee", "type", "conditional", "dynamic", "evidence_ids"],
+        "properties": {
+          "caller": {"type": "string"},
+          "callee": {"type": "string"},
+          "type": {"enum": ["calls"]},
+          "conditional": {"type": "boolean"},
+          "dynamic": {"type": "boolean"},
+          "evidence_ids": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "coverage": {"type": "object"},
+    "partial_reason": {"type": ["string", "null"]}
+  }
+}

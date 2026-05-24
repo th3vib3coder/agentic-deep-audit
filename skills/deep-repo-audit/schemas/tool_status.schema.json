@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tool Status",
+  "type": "object",
+  "required": ["schema_version", "tools"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "status", "policy"],
+        "allOf": [
+          {
+            "if": {"properties": {"status": {"const": "skipped"}}},
+            "then": {"required": ["skipped_reason"]}
+          },
+          {
+            "if": {"properties": {"status": {"const": "degraded"}}},
+            "then": {"required": ["os", "capability", "degradation", "degradation_reason"]}
+          },
+          {
+            "if": {"properties": {"status": {"const": "deferred"}}},
+            "then": {"required": ["os", "capability", "degradation", "degradation_reason", "skipped_reason"]}
+          }
+        ],
+        "properties": {
+          "tool": {"type": "string"},
+          "status": {"enum": ["detected", "completed", "skipped", "blocked", "failed", "degraded", "deferred"]},
+          "available": {"type": "boolean"},
+          "version": {"type": ["string", "null"]},
+          "command": {"type": "array", "items": {"type": "string"}},
+          "phase": {"type": ["string", "null"]},
+          "policy": {"enum": ["allowed", "skipped", "blocked", "host_mcp_read_exception", "deferred"]},
+          "duration_ms": {"type": ["integer", "number", "null"]},
+          "exit_code": {"type": ["integer", "null"]},
+          "output_path": {"type": ["string", "null"]},
+          "skipped_reason": {"type": "string"},
+          "os": {"type": "string"},
+          "capability": {"type": "string"},
+          "availability": {"type": "string"},
+          "degradation_reason": {"type": "string"},
+          "provenance_class": {"type": "string"},
+          "degradation": {"type": "string"},
+          "notes": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

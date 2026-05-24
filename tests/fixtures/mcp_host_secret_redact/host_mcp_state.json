@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "secret-server": {
+      "tools": [
+        {
+          "name": "agentic_deep_audit_Abcdef1234567890QRSTuvwx"
+        }
+      ],
+      "resources": [
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature"
+      ],
+      "prompts": [
+        "ghp_abcdefghijklmnop123456"
+      ],
+      "args": [
+        "AKIAABCDEFGHIJKLMNOP",
+        "Bearer abcdefghij",
+        "Abcdef1234567890QRSTuvwx"
+      ]
+    }
+  }
+}

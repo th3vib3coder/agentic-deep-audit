@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "target-tool": {
+      "command": "node",
+      "args": ["server.js"],
+      "env": {
+        "TOKEN": "do-not-import"
+      }
+    }
+  }
+}

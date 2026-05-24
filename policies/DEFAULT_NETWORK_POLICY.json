@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "default": "deny",
+  "allowed_domains": [],
+  "denied_domains": ["*"],
+  "rate_limits": [],
+  "redaction_rules": ["token", "authorization", "cookie", "set-cookie"],
+  "send_source_code": false,
+  "send_dependency_names": true
+}

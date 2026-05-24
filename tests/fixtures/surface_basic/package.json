@@ -1,0 +1,14 @@
+{
+  "name": "surface-basic-js",
+  "version": "1.0.0",
+  "bin": {
+    "surface-js": "src/index.ts"
+  },
+  "scripts": {
+    "start": "node src/index.ts"
+  },
+  "dependencies": {
+    "express": "^4.18.0",
+    "ws": "^8.0.0"
+  }
+}

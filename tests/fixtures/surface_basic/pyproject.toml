@@ -1,0 +1,6 @@
+[project]
+name = "surface-basic"
+version = "0.1.0"
+
+[project.scripts]
+surface-cli = "surface_app:main"

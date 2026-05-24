@@ -1,0 +1,17 @@
+dataset_path: data/counts.tsv
+dataset_sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+source_url: https://example.org/datasets/pbmc10k
+random_seed: 1234
+organism: Homo sapiens
+taxon_id: 9606
+genome_build: GRCh38
+annotation_source: GENCODE
+annotation_version: GENCODE v44
+normalization_method: log1p CPM
+batch_key: donor_id
+confounders: percent_mito,n_counts
+model_checkpoint: models/scvi_model.pt
+scanpy_version: 1.10.1
+nextflow_version: 23.10.1
+n_neighbors: 15
+resolution: 0.8

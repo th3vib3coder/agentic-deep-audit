@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-deep-audit"
+version = "0.1.0"
+description = "Evidence-first Codex plugin for deep audits of local and GitHub open-source repositories."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary until an explicit release license is selected" }
+authors = [
+  { name = "AgenticDeepAudit contributors" }
+]
+dependencies = [
+  "jsonschema>=4.0",
+]
+
+[project.scripts]
+deep-audit = "agentic_deep_audit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+norecursedirs = ["tests/fixtures"]

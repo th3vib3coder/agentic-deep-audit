@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "allowed": [
+    {"command": "git", "subcommands": ["rev-parse", "status", "ls-files", "log"], "network": false},
+    {"command": "rg", "subcommands": ["*"], "network": false},
+    {"command": "python", "subcommands": ["-m agentic_deep_audit", "-m agentic_deep_audit.cli", "-m agentic_deep_audit.gate"], "network": false},
+    {"command": "graphify", "subcommands": ["--input", "--version"], "network": false}
+  ],
+  "blocked_always": ["npm", "pip", "make", "bash", "sh", "powershell", "cmd", "docker run"],
+  "sandbox_only": ["pytest", "cargo test", "go test", "npm test"]
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "default": "deny",
+  "allowed_domains": ["api.example.com", "*.example.org"],
+  "denied_domains": ["*.example.com", "blocked.example.org"],
+  "redaction_rules": ["token"],
+  "send_source_code": false,
+  "send_dependency_names": true
+}

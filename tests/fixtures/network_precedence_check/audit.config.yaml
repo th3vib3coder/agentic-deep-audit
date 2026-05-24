@@ -1,0 +1,11 @@
+schema_version: "1.0"
+repo:
+  kind: "local"
+  path: "."
+  github: null
+profile: "minimal"
+mode: "source-audit"
+output_dir: "audit"
+network_policy_file: ".network_policy.json"
+target_context: "MIT downstream"
+binary_triage_consent: false

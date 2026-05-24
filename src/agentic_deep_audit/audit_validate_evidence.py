@@ -1,0 +1,234 @@
+"""Evidence-linked validation checks for audit artifacts."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any
+
+from .audit_evidence import sha256_range
+from .audit_validate_common import ValidationResult, load_json
+from .mcp_policy import looks_secret
+from .models import ARTIFACT_PATHS
+
+
+def markdown_evidence_ids(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return re.findall(r"ev-\d{6}", path.read_text(encoding="utf-8"))
+
+
+def markdown_section(text: str, heading: str) -> str:
+    start = text.find(heading)
+    if start < 0:
+        return ""
+    match = re.search(r"\n## ", text[start + len(heading) :])
+    if match is None:
+        return text[start:]
+    end = start + len(heading) + match.start()
+    return text[start:end]
+
+
+def validate_license_status_source(source: Any, candidate_index: int, evidence_index: dict[str, Any], available: set[str], errors: list[str]) -> None:
+    if not isinstance(source, str) or not source:
+        errors.append(f"SPECIAL_IMPLEMENTATIONS.json candidate {candidate_index} missing license_status_source")
+        return
+    if source == "unknown_requires_license_card":
+        return
+    match = re.fullmatch(r"(root_license|file_evidence|dependency_evidence):(ev-\d{6})", source)
+    if match is None:
+        errors.append(f"SPECIAL_IMPLEMENTATIONS.json candidate {candidate_index} invalid license_status_source: {source}")
+        return
+    source_kind, evidence_id = match.groups()
+    if evidence_id not in available:
+        errors.append(f"SPECIAL_IMPLEMENTATIONS.json candidate {candidate_index} license_status_source references unreachable evidence id: {evidence_id}")
+        return
+    if source_kind == "root_license":
+        evidence_by_id = {str(item.get("id")): item for item in evidence_index.get("evidence", []) if isinstance(item, dict)}
+        path_value = str((evidence_by_id.get(evidence_id) or {}).get("path") or "")
+        if not path_value.upper().startswith("LICENSE"):
+            errors.append(f"SPECIAL_IMPLEMENTATIONS.json candidate {candidate_index} root_license source is not root license evidence: {evidence_id}")
+
+
+def validate_synthesis_artifacts(audit_dir: Path, evidence_index: dict[str, Any]) -> ValidationResult:
+    errors: list[str] = []
+    available = {str(item.get("id")) for item in evidence_index.get("evidence", []) if isinstance(item, dict) and item.get("id")}
+    markdown_keys = ["ARCHITECTURE", "FEATURE_CATALOG", "PATTERNS", "OPEN_QUESTIONS"]
+    for key in markdown_keys:
+        path = audit_dir / ARTIFACT_PATHS[key]
+        if not path.exists():
+            if key in {"FEATURE_CATALOG", "PATTERNS"}:
+                errors.append(f"missing required synthesis artifact: {path}")
+            continue
+        for evidence_id in markdown_evidence_ids(path):
+            if evidence_id not in available:
+                errors.append(f"{ARTIFACT_PATHS[key]} references unreachable evidence id: {evidence_id}")
+        if key == "ARCHITECTURE":
+            synthesis = markdown_section(path.read_text(encoding="utf-8"), "## Evidence-Backed Synthesis")
+            for line in synthesis.splitlines():
+                if line.startswith("- ") and "skipped" not in line.lower() and not re.search(r"ev-\d{6}", line):
+                    errors.append("ARCHITECTURE.md synthesis claim lacks evidence id")
+    feature_path = audit_dir / ARTIFACT_PATHS["FEATURE_CATALOG"]
+    if feature_path.exists():
+        for line in feature_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("| ") and not line.startswith("| Feature") and not line.startswith("|---") and "skipped" not in line:
+                if not re.search(r"ev-\d{6}", line):
+                    errors.append("FEATURE_CATALOG.md feature row lacks evidence id")
+    patterns_path = audit_dir / ARTIFACT_PATHS["PATTERNS"]
+    if patterns_path.exists():
+        for line in patterns_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("| ") and not line.startswith("| Pattern") and not line.startswith("|---") and "skipped" not in line:
+                if not re.search(r"ev-\d{6}", line):
+                    errors.append("PATTERNS.md pattern row lacks evidence id")
+    special_path = audit_dir / ARTIFACT_PATHS["SPECIAL_IMPLEMENTATIONS"]
+    special = load_json(special_path, errors) if special_path.exists() else None
+    if special_path.exists() and special is not None:
+        candidates = special.get("candidates")
+        if not isinstance(candidates, list):
+            errors.append("SPECIAL_IMPLEMENTATIONS.json requires candidates array")
+        else:
+            for index, candidate in enumerate(candidates):
+                if not isinstance(candidate, dict):
+                    errors.append(f"SPECIAL_IMPLEMENTATIONS.json candidates[{index}] must be object")
+                    continue
+                for key in ["coupling", "dependencies", "license_status_source", "performance_note", "limitations", "evidence_ids"]:
+                    if key not in candidate:
+                        errors.append(f"SPECIAL_IMPLEMENTATIONS.json candidate {index} missing {key}")
+                if not candidate.get("evidence_ids"):
+                    errors.append(f"SPECIAL_IMPLEMENTATIONS.json candidate {index} missing evidence_ids")
+                validate_license_status_source(candidate.get("license_status_source"), index, evidence_index, available, errors)
+    return ValidationResult(ok=not errors, errors=errors)
+
+
+def validate_evidence_provenance_drift(audit_dir: Path, evidence_index: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    provenance_path = audit_dir / ARTIFACT_PATHS["PROVENANCE"]
+    if not provenance_path.exists():
+        return errors
+    provenance = load_json(provenance_path, errors)
+    if provenance is None:
+        return errors
+    evidence_commit = (evidence_index.get("repo") or {}).get("commit")
+    git = provenance.get("git") if isinstance(provenance.get("git"), dict) else {}
+    provenance_commit = git.get("commit")
+    evidence_repo_path = Path(str((evidence_index.get("repo") or {}).get("path") or ".")).resolve()
+    provenance_target = git.get("target_path") or git.get("repo_root")
+    if provenance_target and evidence_repo_path != Path(str(provenance_target)).resolve():
+        errors.append("EVIDENCE_INDEX.json repo.path differs from PROVENANCE.json target path")
+    limitations = git.get("limitations")
+    no_git_explicit = provenance_commit is None and isinstance(limitations, list) and bool(limitations)
+    if evidence_commit != provenance_commit:
+        if not (evidence_commit is None and no_git_explicit):
+            errors.append("EVIDENCE_INDEX.json repo.commit differs from PROVENANCE.json git.commit")
+    if evidence_commit and provenance_commit == evidence_commit:
+        for item in evidence_index.get("evidence", []):
+            if not isinstance(item, dict) or "start_byte" not in item or "end_byte" not in item:
+                continue
+            if not isinstance(item.get("start_byte"), int) or not isinstance(item.get("end_byte"), int):
+                continue
+            path_value = str(item.get("path") or "")
+            if not is_safe_relative_evidence_path(path_value):
+                continue
+            source = resolve_evidence_source(Path(str((evidence_index.get("repo") or {}).get("path") or ".")), path_value)
+            if source is None:
+                continue
+            if source.exists() and item.get("sha256") != sha256_range(source.read_bytes(), int(item["start_byte"]), int(item["end_byte"])):
+                errors.append(f"evidence drift for same provenance input: {path_value}")
+    return errors
+
+
+def validate_cross_artifact_evidence_references(audit_dir: Path, evidence_index: dict[str, Any]) -> list[str]:
+    available = {str(item.get("id")) for item in evidence_index.get("evidence", []) if isinstance(item, dict) and item.get("id")}
+    errors: list[str] = []
+    evidence_index_path = (audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]).resolve()
+    for path in sorted(audit_dir.rglob("*.json")):
+        if path.resolve() == evidence_index_path:
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        artifact_name = path.relative_to(audit_dir).as_posix()
+        collect_unreachable_evidence_ids(payload, artifact_name, available, errors)
+    return errors
+
+
+def collect_unreachable_evidence_ids(value: Any, path: str, available: set[str], errors: list[str]) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            next_path = f"{path}.{key}"
+            if key == "evidence_ids":
+                if not isinstance(item, list):
+                    errors.append(f"{next_path} must be an array")
+                    continue
+                for evidence_id in item:
+                    if not isinstance(evidence_id, str) or not re.fullmatch(r"ev-\d{6}", evidence_id):
+                        errors.append(f"{next_path} contains invalid evidence id: {evidence_id!r}")
+                    elif evidence_id not in available:
+                        errors.append(f"{next_path} references unreachable evidence id: {evidence_id}")
+                continue
+            collect_unreachable_evidence_ids(item, next_path, available, errors)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            collect_unreachable_evidence_ids(item, f"{path}[{index}]", available, errors)
+
+
+def is_safe_relative_evidence_path(path_value: str) -> bool:
+    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
+        return False
+    posix_path = PurePosixPath(path_value)
+    windows_path = PureWindowsPath(path_value)
+    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive or windows_path.root:
+        return False
+    return ".." not in posix_path.parts and ".." not in windows_path.parts
+
+
+def resolve_evidence_source(repo_path: Path, path_value: str) -> Path | None:
+    if not is_safe_relative_evidence_path(path_value):
+        return None
+    repo_root = repo_path.resolve()
+    candidate = (repo_root / path_value).resolve()
+    try:
+        candidate.relative_to(repo_root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def validate_provenance_artifact(audit_dir: Path) -> ValidationResult:
+    errors: list[str] = []
+    provenance = load_json(audit_dir / ARTIFACT_PATHS["PROVENANCE"], errors)
+    if provenance is None:
+        return ValidationResult(ok=False, errors=errors)
+    git = provenance.get("git")
+    if not isinstance(git, dict):
+        errors.append("PROVENANCE.json requires git object")
+        return ValidationResult(ok=False, errors=errors)
+    commit = git.get("commit")
+    limitations = git.get("limitations")
+    if commit is None:
+        if not isinstance(limitations, list) or not limitations:
+            errors.append("PROVENANCE.json requires commit SHA or explicit no-git limitation")
+    elif not (isinstance(commit, str) and len(commit) == 40):
+        errors.append("PROVENANCE.json git.commit must be a 40-character SHA or null")
+    secret_paths: list[str] = []
+    collect_secret_paths(provenance, "PROVENANCE", secret_paths)
+    for secret_path in secret_paths:
+        errors.append(f"PROVENANCE.json contains unredacted secret-like value at {secret_path}")
+    for remote in git.get("remotes", []):
+        if isinstance(remote, dict) and isinstance(remote.get("url"), str):
+            if any(secret in remote["url"] for secret in ["ghp_", "github_pat_", "Bearer", "AKIA", "ASIA"]):
+                errors.append("PROVENANCE.json contains unredacted remote credential")
+    return ValidationResult(ok=not errors, errors=errors)
+
+
+def collect_secret_paths(value: Any, path: str, results: list[str]) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            collect_secret_paths(item, f"{path}.{key}", results)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            collect_secret_paths(item, f"{path}[{index}]", results)
+    elif isinstance(value, str) and looks_secret(value):
+        results.append(path)

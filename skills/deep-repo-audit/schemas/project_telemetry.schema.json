@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Project Telemetry",
+  "type": "object",
+  "required": ["schema_version", "records"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "records": {"type": "array", "items": {"type": "object", "required": ["telemetry_id", "category", "status", "parameters", "value", "evidence_ids", "source", "confidence", "limitations"], "allOf": [{"if": {"properties": {"status": {"const": "skipped"}}}, "then": {"properties": {"limitations": {"minItems": 1}}}}], "properties": {"telemetry_id": {"type": "string"}, "category": {"enum": ["changelog_parsing", "release_cadence", "contributors_graph", "bus_factor_proxy", "ownership_concentration", "dependency_upgrade_churn", "api_doc_extraction", "commit_message_quality_signal", "issue_pr_signals"]}, "status": {"enum": ["observed", "skipped"]}, "parameters": {"type": "object", "required": ["time_window_days", "from_ref", "to_ref", "bot_filter", "identity_normalization"]}, "value": {"type": ["object", "null"]}, "evidence_ids": {"type": "array", "items": {"type": "string"}}, "source": {"type": "string"}, "confidence": {"enum": ["high", "medium", "low"]}, "limitations": {"type": "array", "items": {"type": "string"}}}}}
+  }
+}

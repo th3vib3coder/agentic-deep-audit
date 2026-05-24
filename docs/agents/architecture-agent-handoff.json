@@ -1,0 +1,23 @@
+{
+  "agent": "architecture-agent",
+  "mode": "read-only-synthesis",
+  "read_only_inputs": [
+    "MODULE_GRAPH.json",
+    "SYMBOL_INDEX.json",
+    "API_SURFACE.json",
+    "CLI_SURFACE.json",
+    "MCP_SURFACE.json",
+    "CONFIG_SURFACE.json",
+    "MANIFESTS.json",
+    "EVIDENCE_INDEX.json"
+  ],
+  "allowed_outputs": [
+    "ARCHITECTURE.md",
+    "FEATURE_CATALOG.md",
+    "PATTERNS.md",
+    "SPECIAL_IMPLEMENTATIONS.json",
+    "OPEN_QUESTIONS.md"
+  ],
+  "target_repo_write_access": false,
+  "claim_policy": "Every synthesis claim must cite reachable evidence ids or be moved to OPEN_QUESTIONS.md."
+}

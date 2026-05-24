@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from agentic_deep_audit.audit_validate import validate_phase0
+from agentic_deep_audit.bootstrap import PHASES
+from agentic_deep_audit.config import sha256_file
+from agentic_deep_audit.models import ARTIFACT_PATHS
+
+
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PLUGIN_ROOT / "src"
+BOOTSTRAP_SCRIPT = PLUGIN_ROOT / "skills" / "deep-repo-audit" / "scripts" / "audit_bootstrap.py"
+
+
+def cli_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SRC_ROOT)
+    return env
+
+
+def write_config(tmp_path: Path, output_dir: str | None = None, network_policy_file: str | None = None) -> Path:
+    lines = [
+        'schema_version: "1.0"',
+        "repo:",
+        '  kind: "local"',
+        '  path: "."',
+        "  github: null",
+        'profile: "minimal"',
+        'mode: "source-audit"',
+        f'output_dir: "{output_dir or "audit"}"',
+        'target_context: "MIT downstream"',
+        "binary_triage_consent: false",
+    ]
+    if network_policy_file:
+        lines.append(f'network_policy_file: "{network_policy_file}"')
+    config = tmp_path / "audit.config.yaml"
+    config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return config
+
+
+def run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "agentic_deep_audit.cli", *args],
+        cwd=cwd,
+        env=cli_env(),
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_phase0_bootstrap_creates_only_phase0_artifacts(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+
+    result = subprocess.run(
+        [sys.executable, str(BOOTSTRAP_SCRIPT), "--config", str(config)],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    audit_dir = tmp_path / "audit"
+    expected = {
+        ARTIFACT_PATHS["RUN_CONFIG"],
+        ARTIFACT_PATHS["AUDIT_CONFIG_SNAPSHOT"],
+        ARTIFACT_PATHS["TOOL_STATUS"],
+        ARTIFACT_PATHS["PROGRESS"],
+        ARTIFACT_PATHS["BLOCKED_COMMANDS_ATTEMPTS"],
+    }
+    assert {path.name for path in audit_dir.iterdir()} == expected
+    run_config = json.loads((audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).read_text(encoding="utf-8"))
+    assert run_config["provenance"]["config_snapshot_sha256"] == sha256_file(config)
+    assert sha256_file(audit_dir / ARTIFACT_PATHS["AUDIT_CONFIG_SNAPSHOT"]) == sha256_file(config)
+    assert validate_phase0(audit_dir).ok
+
+
+def test_missing_network_policy_is_skipped_and_validate_rejects_missing_run_config(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = run_cli("run", "--config", str(config), cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    audit_dir = tmp_path / "audit"
+
+    tool_status = json.loads((audit_dir / ARTIFACT_PATHS["TOOL_STATUS"]).read_text(encoding="utf-8"))
+    network = next(tool for tool in tool_status["tools"] if tool["tool"] == "network_policy")
+    assert network["status"] == "skipped"
+    assert "network adapters blocked" in network["skipped_reason"]
+
+    (audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).unlink()
+    validation = validate_phase0(audit_dir)
+    assert not validation.ok
+    assert any("RUN_CONFIG.json" in error for error in validation.errors)
+
+
+def test_network_policy_snapshot_when_present(tmp_path: Path) -> None:
+    policy = tmp_path / ".network_policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "default": "deny",
+                "allowed_domains": ["api.github.com"],
+                "denied_domains": ["*"],
+                "send_source_code": False,
+                "rate_limits": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config = write_config(tmp_path, network_policy_file=".network_policy.json")
+
+    result = run_cli("run", "--config", str(config), cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    audit_dir = tmp_path / "audit"
+    run_config = json.loads((audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).read_text(encoding="utf-8"))
+    assert run_config["provenance"]["network_policy_snapshot_sha256"] == sha256_file(policy)
+    assert sha256_file(audit_dir / ARTIFACT_PATHS["NETWORK_POLICY_SNAPSHOT"]) == sha256_file(policy)
+    assert validate_phase0(audit_dir).ok
+
+
+def test_tool_status_records_version_or_skip_reason_and_progress_phases(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = run_cli("run", "--config", str(config), cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    audit_dir = tmp_path / "audit"
+
+    tool_status = json.loads((audit_dir / ARTIFACT_PATHS["TOOL_STATUS"]).read_text(encoding="utf-8"))
+    for tool in tool_status["tools"]:
+        if tool["status"] == "detected":
+            assert tool["version"]
+        if tool["status"] == "skipped":
+            assert tool["skipped_reason"]
+
+    progress = (audit_dir / ARTIFACT_PATHS["PROGRESS"]).read_text(encoding="utf-8")
+    assert "Current phase: 0 Bootstrap Sicuro" in progress
+    for number, name in PHASES:
+        assert f"| {number} | {name} | pending |" in progress
+
+    blocked = json.loads((audit_dir / ARTIFACT_PATHS["BLOCKED_COMMANDS_ATTEMPTS"]).read_text(encoding="utf-8"))
+    assert blocked == {"schema_version": "1.0", "attempts": []}
+
+
+def test_bootstrap_rejects_output_outside_allowed_root(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    config = write_config(tmp_path, output_dir=str(outside))
+
+    result = run_cli("run", "--config", str(config), cwd=tmp_path)
+
+    assert result.returncode == 2
+    assert "outside allowed root" in result.stderr
+    assert not outside.exists()
+
+
+def test_bootstrap_script_uses_same_runtime_path(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+
+    result = subprocess.run(
+        [sys.executable, str(BOOTSTRAP_SCRIPT), "--config", str(config)],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert validate_phase0(tmp_path / "audit").ok

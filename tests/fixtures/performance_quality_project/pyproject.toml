@@ -1,0 +1,7 @@
+[project]
+name = "performance-quality-fixture"
+version = "0.1.0"
+dependencies = ["requests==2.32.0"]
+
+[tool.ruff]
+line-length = 100
