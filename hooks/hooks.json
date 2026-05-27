@@ -6,7 +6,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if defined AGENTIC_DEEP_AUDIT_PYTHON (set AGENTIC_DEEP_AUDIT_HOOK_STRICT=1 & \"%AGENTIC_DEEP_AUDIT_PYTHON%\" \"%CLAUDE_PLUGIN_ROOT%\\hooks\\pre_tool_policy.py\") else (echo hook_misconfigured: AGENTIC_DEEP_AUDIT_PYTHON is required 1>&2 & exit /b 2)"
+            "shell": "bash",
+            "command": "case \"$(uname -s 2>/dev/null)\" in MINGW*|MSYS*|CYGWIN*) exit 0;; esac; if [ -n \"$AGENTIC_DEEP_AUDIT_PYTHON\" ]; then \"$AGENTIC_DEEP_AUDIT_PYTHON\" \"$CLAUDE_PLUGIN_ROOT/hooks/pre_tool_policy.py\" --strict-runtime; else echo \"hook_misconfigured: AGENTIC_DEEP_AUDIT_PYTHON is required\" >&2; exit 2; fi"
+          },
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.Platform -ne 'Win32NT') { exit 0 }; if ($env:AGENTIC_DEEP_AUDIT_PYTHON) { & $env:AGENTIC_DEEP_AUDIT_PYTHON (Join-Path $env:CLAUDE_PLUGIN_ROOT 'hooks/pre_tool_policy.py') --strict-runtime; exit $LASTEXITCODE } else { Write-Error 'hook_misconfigured: AGENTIC_DEEP_AUDIT_PYTHON is required'; exit 2 }"
           }
         ]
       }

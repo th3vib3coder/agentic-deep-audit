@@ -8,6 +8,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
+import agentic_deep_audit.audit_inventory as audit_inventory
 from agentic_deep_audit.audit_validate import validate_audit, validate_inventory_artifacts
 from agentic_deep_audit.config import sha256_file
 from agentic_deep_audit.models import ARTIFACT_PATHS
@@ -74,6 +77,13 @@ def run_inventory_fixture(tmp_path: Path) -> tuple[Path, Path]:
     return repo, repo / "audit"
 
 
+def symlink_or_skip(target: Path, link: Path, *, target_is_directory: bool = False) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+
 def test_python_basic_fixture_has_required_file_categories() -> None:
     assert (FIXTURE_ROOT / "src" / "app.py").exists()
     assert (FIXTURE_ROOT / "README.md").exists()
@@ -103,6 +113,80 @@ def test_inventory_respects_scope_filters_and_hashes(tmp_path: Path) -> None:
         assert record["path_normalized"] == path
         assert record["size_bytes"] == (repo / path).stat().st_size
         assert record["sha256"] == sha256_file(repo / path)
+
+
+def test_inventory_skips_symlinks_before_hashing_targets(tmp_path: Path) -> None:
+    repo = prepare_fixture(tmp_path)
+    outside = tmp_path / "outside_secret.txt"
+    outside.write_text("outside secret that must not be indexed\n", encoding="utf-8")
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir()
+    (outside_dir / "nested_secret.txt").write_text("nested secret\n", encoding="utf-8")
+    symlink_or_skip(outside, repo / "linked_secret.txt")
+    symlink_or_skip(outside_dir, repo / "linked_dir", target_is_directory=True)
+    config = write_config(repo)
+
+    result = run_cli("inventory", "--config", str(config), cwd=repo)
+
+    assert result.returncode == 0, result.stderr
+    file_index = json.loads((repo / "audit" / ARTIFACT_PATHS["FILE_INDEX"]).read_text(encoding="utf-8"))
+    paths = {record["path"] for record in file_index["records"]}
+    skipped = {item["path"]: item["reason"] for item in file_index["skipped_paths"]}
+    assert "linked_secret.txt" not in paths
+    assert not any(path.startswith("linked_dir/") for path in paths)
+    assert skipped.get("linked_secret.txt") == "symlink skipped"
+    if "linked_dir" in skipped:
+        assert skipped["linked_dir"] == "symlink skipped"
+    assert sha256_file(outside) not in {record["sha256"] for record in file_index["records"]}
+
+
+def test_scan_files_skips_oversized_files_before_reading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "small.py").write_text("x=1\n", encoding="utf-8")
+    (repo / "large.py").write_bytes(b"x" * 9)
+    monkeypatch.setattr(audit_inventory, "MAX_AUDIT_FILE_BYTES", 8)
+
+    records, skipped, _ = audit_inventory.scan_files(
+        {
+            "repo": {"path": str(repo)},
+            "scope_filters": {"include": ["**/*"], "exclude": []},
+            "output_dir": "audit",
+        }
+    )
+
+    assert {record["path"] for record in records} == {"small.py"}
+    skipped_reasons = {item["path"]: item["reason"] for item in skipped}
+    assert "large.py" in skipped_reasons
+    assert "exceeds size cap" in skipped_reasons["large.py"]
+
+
+def test_scan_files_checks_size_cap_before_reading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    oversized = repo / "large.py"
+    oversized.write_bytes(b"x" * 9)
+    original_read_bytes = Path.read_bytes
+
+    def guarded_read_bytes(path: Path):
+        if path == oversized:
+            raise AssertionError("oversized file was read")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(audit_inventory, "MAX_AUDIT_FILE_BYTES", 8)
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+
+    records, skipped, _ = audit_inventory.scan_files(
+        {
+            "repo": {"path": str(repo)},
+            "scope_filters": {"include": ["**/*"], "exclude": []},
+            "output_dir": "audit",
+        }
+    )
+
+    assert records == []
+    assert skipped and skipped[0]["path"] == "large.py"
+    assert "exceeds size cap" in skipped[0]["reason"]
 
 
 def test_inventory_markdown_derives_counts_and_root_docs(tmp_path: Path) -> None:

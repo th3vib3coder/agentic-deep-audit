@@ -7,6 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+import agentic_deep_audit.audit_surface as audit_surface
+from agentic_deep_audit.limits import FileSizeLimitError
 from agentic_deep_audit.audit_graph import run_graph
 from agentic_deep_audit.audit_inventory import run_inventory
 from agentic_deep_audit.audit_manifest import run_manifest
@@ -84,6 +88,21 @@ def test_cli_surface_records_entrypoints_without_execution(tmp_path: Path) -> No
     assert any(item["kind"] == "go_command" and item["name"] == "surface" for item in cli)
     assert any(item["kind"] == "python_main_guard" and item["entrypoint"] == "src/api.py" for item in cli)
     assert all(item["executable"] is False and item["observed_not_executed"] is True for item in cli)
+
+
+def test_cli_surface_skips_oversized_manifest_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"bin": {"tool": "cli.js"}}\n', encoding="utf-8")
+    (repo / "Cargo.toml").write_text("[[bin]]\nname = 'tool'\n", encoding="utf-8")
+
+    def raise_size_limit(*_args, **_kwargs):
+        raise FileSizeLimitError("test cap")
+
+    monkeypatch.setattr(audit_surface, "read_text_auto_capped", raise_size_limit)
+
+    assert audit_surface.package_bin_records(repo, {"package.json": ["ev-000001"]}, 0) == []
+    assert audit_surface.cargo_bin_records(repo, {"Cargo.toml": ["ev-000002"]}, 0) == []
 
 
 def test_mcp_surface_is_audit_data_only_and_not_host_imported(tmp_path: Path) -> None:

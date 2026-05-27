@@ -2,46 +2,129 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Adapter Decision",
   "type": "object",
-  "required": ["adapter_id", "installability", "license", "version_pinning", "command_readonly", "policy_applied", "schema_output_observed", "fallback", "decision", "reviewer", "decision_date"],
+  "additionalProperties": false,
+  "required": [
+    "adapter_id",
+    "installability",
+    "license",
+    "version_pinning",
+    "command_readonly",
+    "policy_applied",
+    "schema_output_observed",
+    "fallback",
+    "decision",
+    "reviewer",
+    "decision_date"
+  ],
   "properties": {
-    "adapter_id": {"type": "string"},
+    "adapter_id": {
+      "type": "string"
+    },
     "installability": {
       "type": "object",
-      "required": ["os", "notes"],
+      "required": [
+        "os",
+        "notes"
+      ],
       "properties": {
-        "os": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-        "notes": {"type": "string"}
+        "os": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "notes": {
+          "type": "string"
+        }
       }
     },
     "license": {
       "type": "object",
-      "required": ["spdx", "compatible_with_target_context"],
+      "required": [
+        "spdx",
+        "compatible_with_target_context"
+      ],
       "properties": {
-        "spdx": {"type": "string"},
-        "compatible_with_target_context": {"type": "boolean"}
+        "spdx": {
+          "type": "string"
+        },
+        "compatible_with_target_context": {
+          "type": "boolean"
+        }
       }
     },
     "version_pinning": {
       "type": "object",
-      "required": ["strategy", "min_version"],
+      "required": [
+        "strategy",
+        "min_version"
+      ],
       "properties": {
-        "strategy": {"enum": ["exact", "minimum", "range", "system", "bundled"]},
-        "min_version": {"type": ["string", "null"]}
+        "strategy": {
+          "enum": [
+            "exact",
+            "minimum",
+            "range",
+            "system",
+            "bundled"
+          ]
+        },
+        "min_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
-    "command_readonly": {"type": "string"},
-    "policy_applied": {"type": "array", "items": {"enum": ["no-exec", "read-only", "network-deny-default", "redaction", "sandbox", "path-containment"]}, "minItems": 1},
+    "command_readonly": {
+      "type": "string"
+    },
+    "policy_applied": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "no-exec",
+          "read-only",
+          "network-deny-default",
+          "redaction",
+          "sandbox",
+          "path-containment"
+        ]
+      },
+      "minItems": 1
+    },
     "schema_output_observed": {
       "type": "object",
-      "required": ["sample_path", "hash"],
+      "required": [
+        "sample_path",
+        "hash"
+      ],
       "properties": {
-        "sample_path": {"type": "string"},
-        "hash": {"type": "string"}
+        "sample_path": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        }
       }
     },
-    "fallback": {"type": "string"},
-    "decision": {"enum": ["promote", "defer", "reject"]},
-    "reviewer": {"type": "string"},
-    "decision_date": {"type": "string"}
+    "fallback": {
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "promote",
+        "defer",
+        "reject"
+      ]
+    },
+    "reviewer": {
+      "type": "string"
+    },
+    "decision_date": {
+      "type": "string"
+    }
   }
 }

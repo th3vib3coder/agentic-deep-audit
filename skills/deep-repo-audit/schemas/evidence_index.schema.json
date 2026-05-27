@@ -2,52 +2,196 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Evidence Index",
   "type": "object",
-  "required": ["schema_version", "repo", "evidence"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repo",
+    "evidence"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "repo": {"type": "object", "required": ["path", "commit"]},
+    "schema_version": {
+      "type": "string"
+    },
+    "repo": {
+      "type": "object",
+      "required": [
+        "path",
+        "commit"
+      ]
+    },
     "evidence": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "kind", "path", "sha256"],
+        "required": [
+          "id",
+          "kind",
+          "path",
+          "sha256"
+        ],
         "allOf": [
           {
-            "if": {"properties": {"kind": {"const": "file_line"}}},
-            "then": {"required": ["start_line", "end_line", "start_byte", "end_byte", "sha256"]}
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "file_line"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "start_line",
+                "end_line",
+                "start_byte",
+                "end_byte",
+                "sha256"
+              ]
+            }
           },
           {
-            "if": {"properties": {"kind": {"const": "file_range"}}},
-            "then": {"required": ["start_byte", "end_byte", "sha256"]}
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "file_range"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "start_byte",
+                "end_byte",
+                "sha256"
+              ]
+            }
           },
           {
-            "if": {"properties": {"kind": {"const": "symbol_span"}}},
-            "then": {"required": ["symbol", "start_byte", "end_byte", "sha256"]}
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "symbol_span"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "symbol",
+                "start_byte",
+                "end_byte",
+                "sha256"
+              ]
+            }
           },
           {
-            "if": {"properties": {"kind": {"const": "file_range_binary_safe"}}},
-            "then": {"required": ["start_byte", "end_byte", "sha256"]}
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "file_range_binary_safe"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "start_byte",
+                "end_byte",
+                "sha256"
+              ]
+            }
           },
           {
-            "if": {"required": ["binary_safe"], "properties": {"binary_safe": {"const": true}}},
-            "then": {"required": ["start_byte", "end_byte", "sha256"]}
+            "if": {
+              "required": [
+                "binary_safe"
+              ],
+              "properties": {
+                "binary_safe": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "start_byte",
+                "end_byte",
+                "sha256"
+              ]
+            }
           }
         ],
         "properties": {
-          "id": {"type": "string", "pattern": "^ev-[0-9]{6}$"},
-          "kind": {"enum": ["file_line", "file_range", "file_range_binary_safe", "symbol_span", "file_whole", "manifest_entry", "commit_ref", "external"]},
-          "path": {"type": "string"},
-          "start_line": {"type": "integer"},
-          "end_line": {"type": "integer"},
-          "start_byte": {"type": "integer"},
-          "end_byte": {"type": "integer"},
-          "symbol": {"type": ["string", "null"]},
-          "sha256": {"type": "string"},
-          "observed": {"type": "string"},
-          "line_ending_original": {"enum": ["LF", "CRLF", "CR", "mixed", "none"]},
-          "normalized_text_sha256": {"type": "string"},
-          "binary_safe": {"type": "boolean"}
+          "id": {
+            "type": "string",
+            "pattern": "^ev-[0-9]{6,}$"
+          },
+          "kind": {
+            "enum": [
+              "file_line",
+              "file_range",
+              "file_range_binary_safe",
+              "symbol_span",
+              "file_whole",
+              "manifest_entry",
+              "commit_ref",
+              "external"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer"
+          },
+          "end_line": {
+            "type": "integer"
+          },
+          "start_byte": {
+            "type": "integer"
+          },
+          "end_byte": {
+            "type": "integer"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "observed": {
+            "type": "string"
+          },
+          "line_ending_original": {
+            "enum": [
+              "LF",
+              "CRLF",
+              "CR",
+              "mixed",
+              "none"
+            ]
+          },
+          "normalized_text_sha256": {
+            "type": "string"
+          },
+          "binary_safe": {
+            "type": "boolean"
+          }
         }
+      }
+    },
+    "allocator": {
+      "type": "object"
+    },
+    "source_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   }

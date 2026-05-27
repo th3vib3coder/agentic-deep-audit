@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 import zipfile
 from pathlib import Path
@@ -24,10 +25,20 @@ def read(path: Path) -> str:
 def clean_build_artifacts() -> None:
     for target in [PLUGIN_ROOT / "build", PLUGIN_ROOT / "dist", PLUGIN_ROOT / "src" / "agentic_deep_audit.egg-info"]:
         if target.exists():
-            shutil.rmtree(target)
+            last_error: OSError | None = None
+            for _attempt in range(5):
+                try:
+                    shutil.rmtree(target)
+                    last_error = None
+                    break
+                except OSError as exc:
+                    last_error = exc
+                    time.sleep(0.1)
+            if last_error is not None:
+                raise last_error
     for target in PLUGIN_ROOT.glob("*.egg-info"):
         if target.exists():
-            shutil.rmtree(target)
+            shutil.rmtree(target, ignore_errors=True)
 
 
 def build_wheel(tmp_path: Path) -> Path:
@@ -70,7 +81,7 @@ def test_pre_tool_hook_is_registered_for_host_integration() -> None:
     hooks = json.loads(read(hook_path))
 
     pre_tool = hooks["hooks"]["PreToolUse"][0]
-    command = pre_tool["hooks"][0]["command"]
+    registered = pre_tool["hooks"]
     assert "Bash" in pre_tool["matcher"]
     assert "mcp__" in pre_tool["matcher"]
     matcher = re.compile(pre_tool["matcher"])
@@ -83,11 +94,13 @@ def test_pre_tool_hook_is_registered_for_host_integration() -> None:
         "mcp__unknown__read_file",
     ]:
         assert matcher.fullmatch(tool_name)
-    assert "pre_tool_policy.py" in command
-    assert "CLAUDE_PLUGIN_ROOT" in command
-    assert "AGENTIC_DEEP_AUDIT_PYTHON" in command
-    assert "hook_misconfigured" in command
-    assert not command.strip().startswith("python ")
+    assert {hook["shell"] for hook in registered} == {"bash", "powershell"}
+    assert all("AGENTIC_DEEP_AUDIT_PYTHON" in hook["command"] for hook in registered)
+    assert all("--strict-runtime" in hook["command"] for hook in registered)
+    assert all("hook_misconfigured" in hook["command"] for hook in registered)
+    assert all("exit 2" in hook["command"] for hook in registered)
+    assert all("platform" not in hook for hook in registered)
+    assert all("args" not in hook for hook in registered)
 
 
 def test_package_metadata_console_alias_and_plugin_name_align() -> None:
@@ -200,7 +213,7 @@ def test_release_checklist_commands_have_expected_conditions() -> None:
     assert rows
     for command in [
         "pytest tests -q",
-        "334 collected tests",
+        "351 collected tests",
         "test_release_packaging.py",
         "run_smoke_tests.py",
         "test_pre_tool_policy.py",

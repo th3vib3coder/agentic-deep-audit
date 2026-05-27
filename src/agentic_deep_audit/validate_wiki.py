@@ -135,7 +135,7 @@ def validate_page(audit_dir: Path, path: Path, available_evidence: set[str], err
         errors.append(f"{relative} frontmatter evidence_ids must be an array")
         evidence_ids = []
     for evidence_id in evidence_ids:
-        if not isinstance(evidence_id, str) or not re.fullmatch(r"ev-\d{6}", evidence_id):
+        if not isinstance(evidence_id, str) or not re.fullmatch(r"ev-\d{6,}", evidence_id):
             errors.append(f"{relative} contains invalid evidence id: {evidence_id!r}")
         elif evidence_id not in available_evidence:
             errors.append(f"{relative} references unreachable evidence id: {evidence_id}")
@@ -146,7 +146,7 @@ def validate_page(audit_dir: Path, path: Path, available_evidence: set[str], err
         errors.append(f"{relative} observed page lacks frontmatter evidence ids")
     if status == "skipped" and "skipped:" not in text and "Open Questions" not in text:
         errors.append(f"{relative} skipped page lacks skipped/open-question note")
-    for evidence_id in re.findall(r"ev-\d{6}", text):
+    for evidence_id in re.findall(r"ev-\d{6,}", text):
         if evidence_id not in available_evidence:
             errors.append(f"{relative} body references unreachable evidence id: {evidence_id}")
     validate_links(audit_dir, path, text, errors)
@@ -217,7 +217,7 @@ def validate_wiki_artifacts(audit_dir: Path, evidence_index: dict[str, Any]) -> 
         errors.append("wiki decisions requires at least one decision page or skipped/open-question page")
     elif all("skipped:" not in path.read_text(encoding="utf-8", errors="replace") for path in decision_pages):
         # Real decision pages carry evidence; the skipped fallback must be explicit when no evidence is present.
-        if not any(re.search(r"ev-\d{6}", path.read_text(encoding="utf-8", errors="replace")) for path in decision_pages):
+        if not any(re.search(r"ev-\d{6,}", path.read_text(encoding="utf-8", errors="replace")) for path in decision_pages):
             errors.append("wiki decisions pages require evidence or explicit skipped note")
     available = {str(item.get("id")) for item in evidence_index.get("evidence", []) if isinstance(item, dict) and item.get("id")}
     for path in wiki_pages(audit_dir):

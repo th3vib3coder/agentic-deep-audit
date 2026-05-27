@@ -2,55 +2,167 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Corpus Index",
   "type": "object",
-  "required": ["schema_version", "database_path", "skipped", "table_counts", "source_artifact_hashes", "no_secret_check", "rrf"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "database_path",
+    "skipped",
+    "table_counts",
+    "source_artifact_hashes",
+    "no_secret_check",
+    "rrf"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "run_id": {"type": ["string", "null"]},
-    "database_path": {"type": ["string", "null"]},
-    "skipped": {"type": "boolean"},
-    "skip_reason": {"type": ["string", "null"]},
+    "schema_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "database_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "skipped": {
+      "type": "boolean"
+    },
+    "skip_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "table_counts": {
       "type": "object",
-      "required": ["files", "symbols", "evidence", "claims", "graph_nodes", "graph_edges", "wiki_pages"],
+      "required": [
+        "files",
+        "symbols",
+        "evidence",
+        "claims",
+        "graph_nodes",
+        "graph_edges",
+        "wiki_pages"
+      ],
       "properties": {
-        "files": {"type": "integer", "minimum": 0},
-        "symbols": {"type": "integer", "minimum": 0},
-        "evidence": {"type": "integer", "minimum": 0},
-        "claims": {"type": "integer", "minimum": 0},
-        "graph_nodes": {"type": "integer", "minimum": 0},
-        "graph_edges": {"type": "integer", "minimum": 0},
-        "wiki_pages": {"type": "integer", "minimum": 0}
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "symbols": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "claims": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "graph_nodes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "graph_edges": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wiki_pages": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
-    "source_artifact_hashes": {"type": "object"},
+    "source_artifact_hashes": {
+      "type": "object"
+    },
     "no_secret_check": {
       "type": "object",
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "properties": {
-        "status": {"enum": ["pass", "fail", "skipped"]},
-        "raw_secret_like_rows": {"type": "integer", "minimum": 0},
-        "redacted_tokens": {"type": "integer", "minimum": 0},
-        "sample_locations": {"type": "array", "items": {"type": "string"}},
-        "reason": {"type": "string"}
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "skipped"
+          ]
+        },
+        "raw_secret_like_rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "redacted_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sample_locations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
       }
     },
     "rrf": {
       "type": "object",
-      "required": ["k", "weights", "override", "override_keys"],
+      "required": [
+        "k",
+        "weights",
+        "override",
+        "override_keys"
+      ],
       "properties": {
-        "k": {"type": "integer", "minimum": 1},
+        "k": {
+          "type": "integer",
+          "minimum": 1
+        },
         "weights": {
           "type": "object",
-          "required": ["fts", "symbol", "graph", "manifest"],
+          "required": [
+            "fts",
+            "symbol",
+            "graph",
+            "manifest"
+          ],
           "properties": {
-            "fts": {"type": "number", "minimum": 0},
-            "symbol": {"type": "number", "minimum": 0},
-            "graph": {"type": "number", "minimum": 0},
-            "manifest": {"type": "number", "minimum": 0}
+            "fts": {
+              "type": "number",
+              "minimum": 0
+            },
+            "symbol": {
+              "type": "number",
+              "minimum": 0
+            },
+            "graph": {
+              "type": "number",
+              "minimum": 0
+            },
+            "manifest": {
+              "type": "number",
+              "minimum": 0
+            }
           }
         },
-        "override": {"type": "boolean"},
-        "override_keys": {"type": "array", "items": {"type": "string"}}
+        "override": {
+          "type": "boolean"
+        },
+        "override_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     }
   }

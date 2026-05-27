@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .audit_provenance import run_git_command
+from .limits import FileSizeLimitError, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 from .policy import decide_network
 
@@ -121,7 +122,11 @@ def load_mailmap(repo_path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     mapping: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+        lines = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="mailmap").splitlines()
+    except (OSError, FileSizeLimitError):
+        return mapping
+    for line in lines:
         emails = re.findall(r"<([^>]+)>", line)
         if len(emails) >= 2:
             canonical = emails[0].lower()
@@ -169,7 +174,10 @@ def parse_changelog(repo_path: Path, file_index: dict[str, Any], evidence_lookup
         evidence_id = evidence_lookup.get(path_value)
         if evidence_id:
             evidence_ids.append(evidence_id)
-        text = (repo_path / path_value).read_text(encoding="utf-8", errors="replace")
+        try:
+            text = read_text_auto_capped(repo_path / path_value, encoding="utf-8", errors="replace", label="telemetry changelog")
+        except (OSError, FileSizeLimitError):
+            continue
         for line in text.splitlines():
             if not line.startswith("#"):
                 continue

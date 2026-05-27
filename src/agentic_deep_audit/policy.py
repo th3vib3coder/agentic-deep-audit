@@ -97,6 +97,12 @@ def _phrase_matches(command: list[str], phrase: str) -> bool:
     return len(command) >= len(expected) and command[: len(expected)] == expected
 
 
+def _strip_wrapping_quotes(token: str) -> str:
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'}:
+        return token[1:-1]
+    return token
+
+
 def _dangerous_arg(command: list[str]) -> str | None:
     executable = command[0] if command else ""
     blocked = DANGEROUS_ARGS_BY_COMMAND.get(executable, set())
@@ -121,6 +127,10 @@ def _dangerous_arg(command: list[str]) -> str | None:
             return "--receive-pack"
         if executable == "git" and arg.startswith("--exec="):
             return "--exec"
+        if executable == "git" and arg.startswith("--namespace="):
+            return "--namespace"
+        if executable == "git" and arg.startswith("--super-prefix="):
+            return "--super-prefix"
         if executable == "rg" and arg.startswith("--pre="):
             return "--pre"
     return None
@@ -130,6 +140,7 @@ def decide_command(command: list[str], origin: str, mode: str = "source-audit", 
     policy = policy or load_blocked_commands_policy()
     if not command:
         return CommandDecision("block", command, origin, "empty_command", "empty command is invalid")
+    command = [_strip_wrapping_quotes(str(token)) for token in command]
     executable = command[0]
     if origin == "target_repo_manifest":
         return CommandDecision("block", command, origin, "target_repo_manifest_no_exec", "target repo commands are observed data")

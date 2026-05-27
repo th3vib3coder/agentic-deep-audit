@@ -9,14 +9,29 @@ from typing import Any
 
 from .audit_evidence import sha256_range
 from .audit_validate_common import ValidationResult, load_json
+from .limits import FileSizeLimitError, read_bytes_capped, read_text_auto_capped
 from .mcp_policy import looks_secret
 from .models import ARTIFACT_PATHS
 
 
-def markdown_evidence_ids(path: Path) -> list[str]:
+def read_markdown_artifact(path: Path, errors: list[str], label: str) -> str | None:
+    if path.is_symlink():
+        errors.append(f"{label}: symlink artifacts are not allowed: {path}")
+        return None
+    try:
+        return read_text_auto_capped(path, encoding="utf-8", errors="replace", label=label)
+    except FileSizeLimitError as exc:
+        errors.append(f"{label}: {exc}")
+        return None
+
+
+def markdown_evidence_ids(path: Path, errors: list[str], label: str) -> list[str]:
     if not path.exists():
         return []
-    return re.findall(r"ev-\d{6}", path.read_text(encoding="utf-8"))
+    text = read_markdown_artifact(path, errors, label)
+    if text is None:
+        return []
+    return re.findall(r"ev-\d{6,}", text)
 
 
 def markdown_section(text: str, heading: str) -> str:
@@ -36,7 +51,7 @@ def validate_license_status_source(source: Any, candidate_index: int, evidence_i
         return
     if source == "unknown_requires_license_card":
         return
-    match = re.fullmatch(r"(root_license|file_evidence|dependency_evidence):(ev-\d{6})", source)
+    match = re.fullmatch(r"(root_license|file_evidence|dependency_evidence):(ev-\d{6,})", source)
     if match is None:
         errors.append(f"SPECIAL_IMPLEMENTATIONS.json candidate {candidate_index} invalid license_status_source: {source}")
         return
@@ -61,26 +76,33 @@ def validate_synthesis_artifacts(audit_dir: Path, evidence_index: dict[str, Any]
             if key in {"FEATURE_CATALOG", "PATTERNS"}:
                 errors.append(f"missing required synthesis artifact: {path}")
             continue
-        for evidence_id in markdown_evidence_ids(path):
+        text = read_markdown_artifact(path, errors, ARTIFACT_PATHS[key])
+        if text is None:
+            continue
+        for evidence_id in re.findall(r"ev-\d{6,}", text):
             if evidence_id not in available:
                 errors.append(f"{ARTIFACT_PATHS[key]} references unreachable evidence id: {evidence_id}")
         if key == "ARCHITECTURE":
-            synthesis = markdown_section(path.read_text(encoding="utf-8"), "## Evidence-Backed Synthesis")
+            synthesis = markdown_section(text, "## Evidence-Backed Synthesis")
             for line in synthesis.splitlines():
-                if line.startswith("- ") and "skipped" not in line.lower() and not re.search(r"ev-\d{6}", line):
+                if line.startswith("- ") and "skipped" not in line.lower() and not re.search(r"ev-\d{6,}", line):
                     errors.append("ARCHITECTURE.md synthesis claim lacks evidence id")
     feature_path = audit_dir / ARTIFACT_PATHS["FEATURE_CATALOG"]
     if feature_path.exists():
-        for line in feature_path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("| ") and not line.startswith("| Feature") and not line.startswith("|---") and "skipped" not in line:
-                if not re.search(r"ev-\d{6}", line):
-                    errors.append("FEATURE_CATALOG.md feature row lacks evidence id")
+        feature_text = read_markdown_artifact(feature_path, errors, "FEATURE_CATALOG.md")
+        if feature_text is not None:
+            for line in feature_text.splitlines():
+                if line.startswith("| ") and not line.startswith("| Feature") and not line.startswith("|---") and "skipped" not in line:
+                    if not re.search(r"ev-\d{6,}", line):
+                        errors.append("FEATURE_CATALOG.md feature row lacks evidence id")
     patterns_path = audit_dir / ARTIFACT_PATHS["PATTERNS"]
     if patterns_path.exists():
-        for line in patterns_path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("| ") and not line.startswith("| Pattern") and not line.startswith("|---") and "skipped" not in line:
-                if not re.search(r"ev-\d{6}", line):
-                    errors.append("PATTERNS.md pattern row lacks evidence id")
+        patterns_text = read_markdown_artifact(patterns_path, errors, "PATTERNS.md")
+        if patterns_text is not None:
+            for line in patterns_text.splitlines():
+                if line.startswith("| ") and not line.startswith("| Pattern") and not line.startswith("|---") and "skipped" not in line:
+                    if not re.search(r"ev-\d{6,}", line):
+                        errors.append("PATTERNS.md pattern row lacks evidence id")
     special_path = audit_dir / ARTIFACT_PATHS["SPECIAL_IMPLEMENTATIONS"]
     special = load_json(special_path, errors) if special_path.exists() else None
     if special_path.exists() and special is not None:
@@ -133,7 +155,14 @@ def validate_evidence_provenance_drift(audit_dir: Path, evidence_index: dict[str
             source = resolve_evidence_source(Path(str((evidence_index.get("repo") or {}).get("path") or ".")), path_value)
             if source is None:
                 continue
-            if source.exists() and item.get("sha256") != sha256_range(source.read_bytes(), int(item["start_byte"]), int(item["end_byte"])):
+            if not source.exists():
+                continue
+            try:
+                data = read_bytes_capped(source, label="evidence validation source")
+            except FileSizeLimitError as exc:
+                errors.append(f"evidence source exceeds validation size cap: {path_value}: {exc}")
+                continue
+            if item.get("sha256") != sha256_range(data, int(item["start_byte"]), int(item["end_byte"])):
                 errors.append(f"evidence drift for same provenance input: {path_value}")
     return errors
 
@@ -142,14 +171,27 @@ def validate_cross_artifact_evidence_references(audit_dir: Path, evidence_index:
     available = {str(item.get("id")) for item in evidence_index.get("evidence", []) if isinstance(item, dict) and item.get("id")}
     errors: list[str] = []
     evidence_index_path = (audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]).resolve()
+    audit_root = audit_dir.resolve()
     for path in sorted(audit_dir.rglob("*.json")):
+        relative = path.relative_to(audit_dir).as_posix()
+        if path.is_symlink():
+            errors.append(f"{relative} is a symlink JSON artifact")
+            continue
+        try:
+            path.resolve().relative_to(audit_root)
+        except (OSError, ValueError):
+            errors.append(f"{relative} escapes audit directory")
+            continue
         if path.resolve() == evidence_index_path:
             continue
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(read_text_auto_capped(path, encoding="utf-8", label="cross-artifact JSON"))
+        except FileSizeLimitError as exc:
+            errors.append(f"{relative} exceeds validation size cap: {exc}")
+            continue
         except json.JSONDecodeError:
             continue
-        artifact_name = path.relative_to(audit_dir).as_posix()
+        artifact_name = relative
         collect_unreachable_evidence_ids(payload, artifact_name, available, errors)
     return errors
 
@@ -163,7 +205,7 @@ def collect_unreachable_evidence_ids(value: Any, path: str, available: set[str],
                     errors.append(f"{next_path} must be an array")
                     continue
                 for evidence_id in item:
-                    if not isinstance(evidence_id, str) or not re.fullmatch(r"ev-\d{6}", evidence_id):
+                    if not isinstance(evidence_id, str) or not re.fullmatch(r"ev-\d{6,}", evidence_id):
                         errors.append(f"{next_path} contains invalid evidence id: {evidence_id!r}")
                     elif evidence_id not in available:
                         errors.append(f"{next_path} references unreachable evidence id: {evidence_id}")

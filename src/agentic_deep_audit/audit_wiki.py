@@ -417,7 +417,7 @@ def write_table_category(audit_dir: Path, run_config: dict[str, Any], artifact_k
         return
     for index, cells in enumerate(rows, start=1):
         label = cells[0]
-        evidence_ids = re.findall(r"ev-\d{6}", " ".join(cells))
+        evidence_ids = re.findall(r"ev-\d{6,}", " ".join(cells))
         slug = stable_slug(label)
         write_page(audit_dir, f"wiki/{folder}/{index:03d}_{slug}.md", label, page_type, [folder], [ARTIFACT_PATHS[artifact_key]], evidence_ids, f"Expose `{label}` from `{ARTIFACT_PATHS[artifact_key]}`.", [f"- Source row: `{' | '.join(cells)}`."], backlinks=[f"{folder}/index"], run_config=run_config)
 

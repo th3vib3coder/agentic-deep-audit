@@ -11,6 +11,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from defusedxml import ElementTree as DefusedET
+from defusedxml.common import DefusedXmlException
+
+from .limits import FileSizeLimitError, MAX_MANIFEST_FILE_BYTES, read_text_capped
 from .models import ARTIFACT_PATHS
 from .policy import decide_command
 
@@ -61,8 +65,12 @@ def command_tokens(command: str) -> list[str]:
     try:
         tokens = shlex.split(command, posix=True)
     except ValueError:
-        tokens = command.split()
+        tokens = [command.strip()] if command.strip() else []
     return tokens or [command]
+
+
+def read_manifest_text(path: Path, *, errors: str | None = None) -> str:
+    return read_text_capped(path, encoding="utf-8", errors=errors, max_bytes=MAX_MANIFEST_FILE_BYTES, label="manifest")
 
 
 def classify_command(command: str) -> str:
@@ -99,7 +107,7 @@ def dependency(name: str, specifier: str | None = None, scope: str | None = None
 
 
 def parse_pyproject(path: Path) -> dict[str, Any]:
-    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    payload = tomllib.loads(read_manifest_text(path))
     project = payload.get("project") if isinstance(payload.get("project"), dict) else {}
     build_system = payload.get("build-system") if isinstance(payload.get("build-system"), dict) else {}
     dependencies: list[dict[str, Any]] = []
@@ -117,7 +125,7 @@ def parse_pyproject(path: Path) -> dict[str, Any]:
 def parse_requirements(path: Path) -> dict[str, Any]:
     dependencies: list[dict[str, Any]] = []
     lockfiles: list[str] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in read_manifest_text(path, errors="replace").splitlines():
         stripped = line.split("#", 1)[0].strip()
         if not stripped:
             continue
@@ -132,7 +140,7 @@ def parse_requirements(path: Path) -> dict[str, Any]:
 
 
 def parse_package_json(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(read_manifest_text(path))
     dependencies: list[dict[str, Any]] = []
     for scope in ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]:
         for name, specifier in (payload.get(scope) or {}).items():
@@ -142,7 +150,7 @@ def parse_package_json(path: Path) -> dict[str, Any]:
 
 
 def parse_cargo(path: Path) -> dict[str, Any]:
-    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    payload = tomllib.loads(read_manifest_text(path))
     package = payload.get("package") if isinstance(payload.get("package"), dict) else {}
     dependencies: list[dict[str, Any]] = []
     for scope in ["dependencies", "dev-dependencies", "build-dependencies"]:
@@ -155,7 +163,7 @@ def parse_go_mod(path: Path) -> dict[str, Any]:
     dependencies: list[dict[str, Any]] = []
     module_name: str | None = None
     in_require = False
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in read_manifest_text(path, errors="replace").splitlines():
         stripped = line.strip()
         if stripped.startswith("module "):
             module_name = stripped.split(maxsplit=1)[1]
@@ -175,7 +183,7 @@ def parse_go_mod(path: Path) -> dict[str, Any]:
 
 
 def parse_pom(path: Path) -> dict[str, Any]:
-    root = ET.fromstring(path.read_text(encoding="utf-8", errors="replace"))
+    root = DefusedET.fromstring(read_manifest_text(path, errors="replace"))
     ns = {"m": root.tag.split("}")[0].strip("{")} if root.tag.startswith("{") else {}
 
     def find_text(element: ET.Element, name: str) -> str | None:
@@ -195,16 +203,19 @@ def parse_pom(path: Path) -> dict[str, Any]:
 
 
 def parse_gradle(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8", errors="replace")
-    dependencies = [dependency(match.group(1), scope="gradle.dependencies") for match in re.finditer(r"['\"]([^'\"]+:[^'\"]+:[^'\"]+)['\"]", text)]
-    commands = [observed_command(match.group(1), path.name) for match in re.finditer(r"commandLine\s+['\"]([^'\"]+)['\"]", text)]
+    text = read_manifest_text(path, errors="replace")
+    dependencies: list[dict[str, Any]] = []
+    commands: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        dependencies.extend(dependency(match.group(1), scope="gradle.dependencies") for match in re.finditer(r"['\"]([^'\"]+:[^'\"]+:[^'\"]+)['\"]", line))
+        commands.extend(observed_command(match.group(1), path.name) for match in re.finditer(r"commandLine\s+['\"]([^'\"]+)['\"]", line))
     package_match = re.search(r"rootProject\.name\s*=\s*['\"]([^'\"]+)['\"]", text)
     return {"ecosystem": "java", "package_name": package_match.group(1) if package_match else None, "build_system": "gradle", "dependencies": dependencies, "scripts": commands, "lockfiles": ["gradle.lockfile"]}
 
 
 def parse_dockerfile(path: Path) -> dict[str, Any]:
     commands = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in read_manifest_text(path, errors="replace").splitlines():
         stripped = line.strip()
         if stripped.upper().startswith("RUN "):
             commands.append(observed_command(stripped[4:].strip(), path.name, category="build"))
@@ -213,7 +224,7 @@ def parse_dockerfile(path: Path) -> dict[str, Any]:
 
 def parse_compose(path: Path) -> dict[str, Any]:
     commands = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in read_manifest_text(path, errors="replace").splitlines():
         stripped = line.strip()
         if stripped.startswith("command:"):
             commands.append(observed_command(stripped.split(":", 1)[1].strip().strip("'\""), path.name))
@@ -264,7 +275,7 @@ def manifest_records(file_index: dict[str, Any], evidence_lookup: dict[str, str]
             continue
         try:
             parsed = parse_manifest(repo_path / path_value)
-        except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError, tomllib.TOMLDecodeError, ET.ParseError) as exc:
+        except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError, tomllib.TOMLDecodeError, ET.ParseError, DefusedXmlException, FileSizeLimitError) as exc:
             records.append(
                 {
                     "path": path_value,
@@ -315,7 +326,18 @@ def extract_ci_run_commands(text: str, path_value: str) -> list[dict[str, Any]]:
 
 
 def parse_ci_workflow(path: Path, path_value: str, evidence_id: str | None) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        text = read_manifest_text(path, errors="replace")
+    except FileSizeLimitError as exc:
+        return {
+            "path": path_value,
+            "triggers": [],
+            "jobs": [],
+            "commands": [],
+            "skipped": True,
+            "skip_reason": str(exc),
+            "evidence_ids": [evidence_id] if evidence_id else [],
+        }
     triggers = sorted(set(re.findall(r"^\s*(push|pull_request|workflow_dispatch|schedule|merge_request_event)\s*:", text, flags=re.MULTILINE)))
     commands = extract_ci_run_commands(text, path_value)
     jobs = sorted(set(match.group(1) for match in re.finditer(r"^\s{2}([A-Za-z0-9_.-]+):\s*$", text, flags=re.MULTILINE)))

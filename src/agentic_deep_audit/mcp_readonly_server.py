@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .audit_corpus import query_corpus
+from .limits import read_text_auto_capped
 from .mcp_collision_check import GENERATED_TOOL_NAMES
 from .models import ARTIFACT_PATHS
 
@@ -85,12 +86,13 @@ def resolve_audit_artifact(audit_dir: Path, relative: str) -> Path:
 
 def read_text_artifact(audit_dir: Path, relative: str, max_chars: int = 20000) -> dict[str, Any]:
     path = resolve_audit_artifact(audit_dir, relative)
-    return {"path": relative, "text": path.read_text(encoding="utf-8", errors="replace")[:max_chars]}
+    text = read_text_auto_capped(path, encoding="utf-8", errors="replace", max_bytes=max_chars * 8, label="mcp artifact")
+    return {"path": relative, "text": text[:max_chars]}
 
 
 def graph_neighbors(audit_dir: Path, node_id: str) -> dict[str, Any]:
     graph_path = audit_dir / ARTIFACT_PATHS["GRAPH"]
-    graph = json.loads(graph_path.read_text(encoding="utf-8")) if graph_path.exists() else {"nodes": [], "edges": []}
+    graph = json.loads(read_text_auto_capped(graph_path, encoding="utf-8", label="mcp graph")) if graph_path.exists() else {"nodes": [], "edges": []}
     nodes = {node.get("id"): node for node in graph.get("nodes", []) if isinstance(node, dict)}
     neighbors: list[dict[str, Any]] = []
     for edge in graph.get("edges", []):

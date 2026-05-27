@@ -8,11 +8,15 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from .limits import FileSizeLimitError, read_text_auto_capped
 from .models import ARTIFACT_PATHS, load_schema_registry
 
 
 SCHEMA_BY_ARTIFACT_KEY = {
+    "RUN_CONFIG": "audit_config",
     "NETWORK_POLICY": "network_policy",
+    "DEFAULT_NETWORK_POLICY": "network_policy",
+    "BLOCKED_COMMANDS_ALLOWLIST": "blocked_commands",
     "TOOL_STATUS": "tool_status",
     "EVIDENCE_INDEX": "evidence_index",
     "MODULE_GRAPH": "module_graph",
@@ -36,14 +40,35 @@ SCHEMA_BY_ARTIFACT_KEY = {
     "CORPUS_INDEX": "corpus_index",
 }
 
+SCHEMA_EXEMPT_ARTIFACT_KEYS = {
+    "BLOCKED_COMMANDS_ATTEMPTS",
+    "CI_MAP",
+    "FILE_INDEX",
+    "GRAPH_EDGES",
+    "GRAPH_NODES",
+    "GRAPHIFY_GRAPH",
+    "MANIFESTS",
+    "MCP_CONFIG",
+    "PROVENANCE",
+    "SBOM",
+    "VALIDATION_REPORT_JSON",
+}
+
 
 def schema_by_relative_path() -> dict[str, str]:
     return {ARTIFACT_PATHS[key]: schema for key, schema in SCHEMA_BY_ARTIFACT_KEY.items()}
 
 
+def schema_exempt_relative_paths() -> set[str]:
+    return {ARTIFACT_PATHS[key] for key in SCHEMA_EXEMPT_ARTIFACT_KEYS}
+
+
 def load_json_artifact(path: Path, relative: str, errors: list[str]) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(read_text_auto_capped(path, encoding="utf-8", label="json artifact"))
+    except FileSizeLimitError as exc:
+        errors.append(f"json_size: {relative}: {exc}")
+        return None
     except json.JSONDecodeError as exc:
         errors.append(f"json_parse: {relative}: {exc}")
         return None
@@ -57,13 +82,24 @@ def validate_json_artifact_schemas(audit_dir: Path) -> list[str]:
     errors: list[str] = []
     registry = load_schema_registry()
     mapping = schema_by_relative_path()
+    exempt = schema_exempt_relative_paths()
     for path in sorted(audit_dir.rglob("*.json")):
+        if path.is_symlink():
+            errors.append(f"json_path: {path.relative_to(audit_dir).as_posix()}: symlink JSON artifacts are not allowed")
+            continue
+        try:
+            path.resolve().relative_to(audit_dir.resolve())
+        except (OSError, ValueError):
+            errors.append(f"json_path: {path}: JSON artifact escapes audit directory")
+            continue
         relative = path.relative_to(audit_dir).as_posix()
         payload = load_json_artifact(path, relative, errors)
         if payload is None:
             continue
         schema_name = mapping.get(relative)
         if schema_name is None:
+            if relative not in exempt:
+                errors.append(f"json_schema_unmapped: {relative}: no schema mapping or explicit exemption")
             continue
         schema = registry[schema_name].schema
         validator = Draft202012Validator(schema)

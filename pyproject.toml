@@ -13,6 +13,7 @@ authors = [
   { name = "AgenticDeepAudit contributors" }
 ]
 dependencies = [
+  "defusedxml>=0.7.1",
   "jsonschema>=4.0",
   "PyYAML>=6.0",
 ]

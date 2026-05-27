@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import shlex
 import sys
 from pathlib import Path
@@ -72,6 +73,28 @@ def verify_runtime_ready(strict: bool = False) -> int | None:
         if not configured:
             print("hook_misconfigured: AGENTIC_DEEP_AUDIT_PYTHON is required", file=sys.stderr)
             return 2
+        configured_path = Path(configured)
+        if not configured_path.exists():
+            print("hook_misconfigured: AGENTIC_DEEP_AUDIT_PYTHON does not exist", file=sys.stderr)
+            return 2
+        try:
+            probe = subprocess.run(
+                [str(configured_path), "-c", "import agentic_deep_audit; import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 3)"],
+                cwd=str(PLUGIN_ROOT),
+                env={**os.environ, "PYTHONPATH": str(SRC_ROOT)},
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"hook_misconfigured: AGENTIC_DEEP_AUDIT_PYTHON probe failed: {type(exc).__name__}", file=sys.stderr)
+            return 2
+        if probe.returncode != 0:
+            detail = (probe.stderr or probe.stdout).strip().splitlines()
+            suffix = f": {detail[0]}" if detail else ""
+            print(f"hook_misconfigured: AGENTIC_DEEP_AUDIT_PYTHON cannot import agentic_deep_audit{suffix}", file=sys.stderr)
+            return 2
     return None
 
 
@@ -88,7 +111,10 @@ def command_from_event(event: dict) -> list[str]:
     command = tool_input.get("command")
     if not isinstance(command, str) or not command.strip():
         return []
-    return shlex.split(command, posix=os.name != "nt")
+    try:
+        return shlex.split(command, posix=os.name != "nt")
+    except ValueError:
+        return ["__invalid_command__"]
 
 
 def mcp_verb(tool_name: str) -> str:
@@ -113,8 +139,8 @@ def audit_dir_from_event(event: dict) -> Path:
     return Path(cwd) / "audit"
 
 
-def run_decision(command: list[str], origin: str, audit_dir: Path, block_code: int = 1) -> int:
-    runtime_error = verify_runtime_ready(strict=os.environ.get("AGENTIC_DEEP_AUDIT_HOOK_STRICT") == "1")
+def run_decision(command: list[str], origin: str, audit_dir: Path, block_code: int = 1, strict_runtime: bool = False) -> int:
+    runtime_error = verify_runtime_ready(strict=strict_runtime or os.environ.get("AGENTIC_DEEP_AUDIT_HOOK_STRICT") == "1")
     if runtime_error is not None:
         return runtime_error
     assert append_blocked_attempt is not None
@@ -128,14 +154,14 @@ def run_decision(command: list[str], origin: str, audit_dir: Path, block_code: i
     return 0
 
 
-def run_event_decision(event: dict) -> int:
+def run_event_decision(event: dict, strict_runtime: bool = False) -> int:
     command = command_from_event(event)
     if command:
-        return run_decision(command, "host_pre_tool", audit_dir_from_event(event), block_code=2)
+        return run_decision(command, "host_pre_tool", audit_dir_from_event(event), block_code=2, strict_runtime=strict_runtime)
     tool_name = str(event.get("tool_name") or "")
     if tool_requires_policy(tool_name):
-        return run_decision(["__tool__", tool_name or "<unknown>"], "host_pre_tool", audit_dir_from_event(event), block_code=2)
-    runtime_error = verify_runtime_ready(strict=os.environ.get("AGENTIC_DEEP_AUDIT_HOOK_STRICT") == "1")
+        return run_decision(["__tool__", tool_name or "<unknown>"], "host_pre_tool", audit_dir_from_event(event), block_code=2, strict_runtime=strict_runtime)
+    runtime_error = verify_runtime_ready(strict=strict_runtime or os.environ.get("AGENTIC_DEEP_AUDIT_HOOK_STRICT") == "1")
     if runtime_error is not None:
         return runtime_error
     print("allowed")
@@ -148,16 +174,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--audit-dir", required=True)
     parser.add_argument("command", nargs="+")
     actual_argv = list(sys.argv[1:] if argv is None else argv)
+    strict_runtime = False
+    if "--strict-runtime" in actual_argv:
+        strict_runtime = True
+        actual_argv = [item for item in actual_argv if item != "--strict-runtime"]
     if not actual_argv:
         try:
             event = read_stdin_event()
         except json.JSONDecodeError as exc:
             print(f"blocked: invalid hook JSON: {exc}", file=sys.stderr)
             return 2
-        return run_event_decision(event)
+        return run_event_decision(event, strict_runtime=strict_runtime)
 
     args = parser.parse_args(actual_argv)
-    return run_decision(args.command, args.origin, Path(args.audit_dir))
+    return run_decision(args.command, args.origin, Path(args.audit_dir), strict_runtime=strict_runtime)
 
 
 if __name__ == "__main__":

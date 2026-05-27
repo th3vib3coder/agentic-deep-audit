@@ -1,6 +1,6 @@
 # Agentic Deep Audit Review Ledger
 
-Status: seq 030 accepted; HAT 2 implementation complete; external review pending.
+Status: R6 remediation implemented; external review pending.
 
 Sources: `../../piano_doc/013_ledger.md`, `../../piano_doc/implementazione/001_seq_gate_hook_and_repo_discipline.md`.
 
@@ -12,6 +12,45 @@ Validation: no sequence row can move from pending to ACCEPT without independent 
 
 Archive: `REVIEW_LEDGER_ARCHIVE_001.md` preserves SEQ-014 and earlier HAT 2 rows.
 Archive: `REVIEW_LEDGER_ARCHIVE_002.md` preserves SEQ-015 through SEQ-023.
+
+## R6 - External Redirect Remediation
+
+Author: Codex.
+Reviewer prompts: Archimedes/schema, Lovelace/I-O, Chandra/manifest, Faraday/hook-policy, Hypatia/global consistency.
+Tool-assigned reviewer nicknames: Zeno, Helmholtz, Jason, Lagrange, Boyle.
+Gate: external R5 `REDIRECT`; no self-ACCEPT issued.
+Commands:
+
+- Pre-patch baseline: `python -m pytest tests -q` -> 334 passed.
+- R6 focused suite: `python -m pytest tests/test_policy_security.py tests/test_pre_tool_policy.py tests/test_release_packaging.py tests/test_surface_extraction.py tests/test_project_telemetry.py tests/test_schema_registry_group_a.py tests/test_graph_extraction.py -q` -> 78 passed.
+- Full suite before clean-check: `python -m pytest tests -q` -> 350 passed, 1 skipped.
+- Turing-equivalent clean-check: `git clean -fdx` immediately before `python -m pytest tests -q` -> 350 passed, 1 skipped.
+- `python -m compileall -q src hooks tests` -> OK.
+- `git diff --check` -> OK.
+- `python -m pytest tests --collect-only -q -p no:cacheprovider` -> 351 tests collected.
+
+Reviewer redirects:
+
+- REDIRECT-R6/P1: schema validation silently skipped unmapped JSON artifacts.
+- REDIRECT-R6/P1: validation JSON/Markdown reads remained uncapped and symlink-following.
+- REDIRECT-R6/P1: shared capped read helper was not symlink-safe.
+- REDIRECT-R6/P1: hook registration could fail open before policy code ran; strict runtime only checked env presence.
+- REDIRECT-R6/P1: quoted Windows-style dangerous git args could bypass allowlist policy.
+- REDIRECT-R6/P1: packaging gate and release checklist were stale.
+- REDIRECT-R6/P1: surface/telemetry oversized metadata reads raised uncaught `FileSizeLimitError`.
+
+Remediation:
+
+- Added symlink-safe capped read/hash helper and routed inventory, evidence, manifest, schema validation and core validators through capped reads.
+- Switched Maven XML parsing to `defusedxml`; oversized manifests and CI workflows now skip without executing or parsing commands.
+- Added UTF-16 BOM text handling and faster line-ending counting.
+- Closed bundled root schemas with `additionalProperties: false`, widened evidence id patterns to `ev-[0-9]{6,}`, bound `RUN_CONFIG`, default network policy and blocked command allowlist schemas, and added an explicit JSON artifact exemption allowlist.
+- Blocked `--namespace=` and `--super-prefix=` git forms and stripped wrapping quotes before policy evaluation.
+- Reworked Claude hook registration into POSIX bash and Windows PowerShell fail-closed handlers using `AGENTIC_DEEP_AUDIT_PYTHON`; strict mode now probes path, version and importability.
+- Added regressions for symlink pre-hash skip, size caps before reads, defused Maven XML, CI oversize skip, schema coverage, hook strict runtime, quoted dangerous args, oversized surface/telemetry metadata and current release test count.
+
+Review verdict: REDIRECT remediated locally; awaiting independent external ACCEPT.
+Status: external review pending.
 
 ## SEQ-030 - Implementation Plan Traceability Validation
 

@@ -13,7 +13,7 @@ from .models import ARTIFACT_PATHS
 
 NODE_TYPES = {"repo", "module", "symbol", "feature", "pattern", "risk", "reuse", "artifact"}
 EDGE_TYPES = {"contains", "depends_on", "implements", "documents", "evidences", "risks", "reuses"}
-EVIDENCE_RE = re.compile(r"ev-\d{6}")
+EVIDENCE_RE = re.compile(r"ev-\d{6,}")
 
 
 def load_json(path: Path) -> dict[str, Any]:

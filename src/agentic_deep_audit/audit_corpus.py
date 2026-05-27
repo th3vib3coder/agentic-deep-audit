@@ -372,7 +372,7 @@ def populate_wiki(connection: sqlite3.Connection, audit_dir: Path) -> int:
         relative = path.relative_to(audit_dir).as_posix()
         raw = path.read_text(encoding="utf-8", errors="replace")
         body, _ = redact_text(raw)
-        evidence_ids = sorted(set(re.findall(r"ev-\d{6}", body)))
+        evidence_ids = sorted(set(re.findall(r"ev-\d{6,}", body)))
         title = markdown_title(body, path)
         kind = wiki_type(path.relative_to(root))
         strict_insert(

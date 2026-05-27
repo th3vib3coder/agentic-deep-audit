@@ -2,35 +2,95 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Symbol Index",
   "type": "object",
-  "required": ["schema_version", "symbols"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "symbols"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
+    "schema_version": {
+      "type": "string"
+    },
     "symbols": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["symbol_id", "name", "kind", "path", "span", "public", "evidence_ids"],
+        "required": [
+          "symbol_id",
+          "name",
+          "kind",
+          "path",
+          "span",
+          "public",
+          "evidence_ids"
+        ],
         "properties": {
-          "symbol_id": {"type": "string"},
-          "name": {"type": "string"},
-          "kind": {"enum": ["function", "class", "method", "decorator", "entrypoint", "export", "package", "module"]},
-          "path": {"type": "string"},
+          "symbol_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "function",
+              "class",
+              "method",
+              "decorator",
+              "entrypoint",
+              "export",
+              "package",
+              "module"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
           "span": {
             "type": "object",
-            "required": ["start_line", "end_line", "start_byte", "end_byte"],
+            "required": [
+              "start_line",
+              "end_line",
+              "start_byte",
+              "end_byte"
+            ],
             "properties": {
-              "start_line": {"type": "integer", "minimum": 1},
-              "end_line": {"type": "integer", "minimum": 1},
-              "start_byte": {"type": "integer", "minimum": 0},
-              "end_byte": {"type": "integer", "minimum": 0}
+              "start_line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "end_line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "start_byte": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end_byte": {
+                "type": "integer",
+                "minimum": 0
+              }
             }
           },
-          "public": {"type": "boolean"},
-          "exported": {"type": "boolean"},
-          "evidence_ids": {"type": "array", "items": {"type": "string"}}
+          "public": {
+            "type": "boolean"
+          },
+          "exported": {
+            "type": "boolean"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ev-[0-9]{6,}$"
+            }
+          }
         }
       }
     },
-    "coverage": {"type": "object"}
+    "coverage": {
+      "type": "object"
+    }
   }
 }

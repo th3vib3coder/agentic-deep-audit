@@ -2,10 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Special Implementations",
   "type": "object",
-  "required": ["schema_version", "candidates"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidates"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "run_id": {"type": ["string", "null"]},
+    "schema_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "candidates": {
       "type": "array",
       "items": {
@@ -23,23 +34,72 @@
           "evidence_ids"
         ],
         "properties": {
-          "candidate_id": {"type": "string"},
-          "name": {"type": "string"},
-          "kind": {"enum": ["algorithm", "data_structure", "optimization", "reusable_component"]},
-          "files": {"type": "array", "items": {"type": "string"}},
-          "coupling": {"enum": ["low", "medium", "high", "unknown"]},
-          "dependencies": {"type": "array", "items": {"type": "string"}},
+          "candidate_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "algorithm",
+              "data_structure",
+              "optimization",
+              "reusable_component"
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "coupling": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "unknown"
+            ]
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "license_status_source": {
             "type": "string",
-            "pattern": "^(unknown_requires_license_card|root_license:ev-[0-9]{6}|file_evidence:ev-[0-9]{6}|dependency_evidence:ev-[0-9]{6})$"
+            "pattern": "^(unknown_requires_license_card|root_license:ev-[0-9]{6,}|file_evidence:ev-[0-9]{6,}|dependency_evidence:ev-[0-9]{6,})$"
           },
-          "performance_note": {"type": "string"},
-          "limitations": {"type": "array", "items": {"type": "string"}},
-          "evidence_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+          "performance_note": {
+            "type": "string"
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ev-[0-9]{6,}$"
+            },
+            "minItems": 1
+          }
         }
       }
     },
-    "skipped": {"type": "boolean"},
-    "skip_reason": {"type": ["string", "null"]}
+    "skipped": {
+      "type": "boolean"
+    },
+    "skip_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   }
 }

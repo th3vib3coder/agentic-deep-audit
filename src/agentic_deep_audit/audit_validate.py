@@ -21,6 +21,7 @@ from .validate_claim_language import validate_anti_overclaim_language
 from .validate_json_schema import validate_json_artifact_schemas
 from .bootstrap import PHASES
 from .config import sha256_file
+from .limits import FileSizeLimitError, read_bytes_capped, read_text_auto_capped, sha256_file_capped
 from .audit_inventory import KIND_VALUES
 from .mcp_policy import looks_secret
 from .models import ARTIFACT_PATHS
@@ -72,11 +73,24 @@ def validate_tool_status(payload: dict[str, Any], errors: list[str]) -> None:
                 errors.append(f"TOOL_STATUS.json tools[{index}] missing {key}")
 
 
+def read_validation_text(path: Path, errors: list[str], label: str) -> str | None:
+    if path.is_symlink():
+        errors.append(f"{label}: symlink artifacts are not allowed: {path}")
+        return None
+    try:
+        return read_text_auto_capped(path, encoding="utf-8", errors="replace", label=label)
+    except FileSizeLimitError as exc:
+        errors.append(f"{label}: {exc}")
+        return None
+
+
 def validate_progress(path: Path, errors: list[str]) -> None:
     if not path.exists():
         errors.append(f"missing required artifact: {path}")
         return
-    text = path.read_text(encoding="utf-8")
+    text = read_validation_text(path, errors, "PROGRESS.md")
+    if text is None:
+        return
     if "Current phase: 0 Bootstrap Sicuro" not in text:
         errors.append("PROGRESS.md missing current phase 0")
     for number, name in PHASES:
@@ -89,8 +103,12 @@ def progress_phase_statuses(audit_dir: Path) -> dict[int, str]:
     path = audit_dir / ARTIFACT_PATHS["PROGRESS"]
     if not path.exists():
         return {}
+    errors: list[str] = []
+    text = read_validation_text(path, errors, "PROGRESS.md")
+    if text is None:
+        return {}
     statuses: dict[int, str] = {}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in text.splitlines():
         if not line.startswith("|"):
             continue
         cells = [cell.strip(" `") for cell in line.strip().strip("|").split("|")]
@@ -140,8 +158,8 @@ def run_config_repo_path(audit_dir: Path) -> Path | None:
     if not path.exists():
         return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        payload = json.loads(read_text_auto_capped(path, encoding="utf-8", label="RUN_CONFIG.json"))
+    except (FileSizeLimitError, json.JSONDecodeError):
         return None
     repo = payload.get("repo") if isinstance(payload, dict) else {}
     repo_path = repo.get("path") if isinstance(repo, dict) else None
@@ -220,18 +238,25 @@ def validate_inventory_artifacts(audit_dir: Path) -> ValidationResult:
             continue
         if not actual.exists():
             errors.append(f"indexed file missing from repo: {path}")
-        elif record.get("sha256") and sha256_file(actual) != record["sha256"]:
-            errors.append(f"sha256 mismatch for indexed file: {path}")
+        elif record.get("sha256"):
+            try:
+                actual_hash = sha256_file_capped(actual, label="indexed file")
+            except FileSizeLimitError as exc:
+                errors.append(f"indexed file exceeds validation size cap: {path}: {exc}")
+                continue
+            if actual_hash != record["sha256"]:
+                errors.append(f"sha256 mismatch for indexed file: {path}")
     if evidence_index is not None:
         evidence_paths = {str(item.get("path")) for item in evidence_index.get("evidence", []) if isinstance(item, dict)}
         for doc in file_index.get("root_documents", []):
             if isinstance(doc, dict) and doc.get("status") == "found" and doc.get("path") not in evidence_paths:
                 errors.append(f"root doc lacks evidence record: {doc.get('path')}")
     if inventory_path.exists():
-        text = inventory_path.read_text(encoding="utf-8")
-        for kind in KIND_VALUES:
-            if f"| {kind} |" not in text:
-                errors.append(f"INVENTORY.md missing kind count: {kind}")
+        text = read_validation_text(inventory_path, errors, "INVENTORY.md")
+        if text is not None:
+            for kind in KIND_VALUES:
+                if f"| {kind} |" not in text:
+                    errors.append(f"INVENTORY.md missing kind count: {kind}")
     return ValidationResult(ok=not errors, errors=errors)
 
 
@@ -254,7 +279,7 @@ def validate_evidence_index_artifact(audit_dir: Path) -> ValidationResult:
             errors.append(f"EVIDENCE_INDEX.json evidence[{index}] must be object")
             continue
         evidence_id = str(item.get("id") or "")
-        if not re.fullmatch(r"ev-\d{6}", evidence_id):
+        if not re.fullmatch(r"ev-\d{6,}", evidence_id):
             errors.append(f"EVIDENCE_INDEX.json invalid evidence id: {evidence_id or index}")
         if evidence_id in seen:
             errors.append(f"EVIDENCE_INDEX.json duplicate evidence id: {evidence_id}")
@@ -270,7 +295,11 @@ def validate_evidence_index_artifact(audit_dir: Path) -> ValidationResult:
         if not source.exists():
             errors.append(f"evidence source path missing: {path_value}")
             continue
-        data = source.read_bytes()
+        try:
+            data = read_bytes_capped(source, label="evidence validation source")
+        except FileSizeLimitError as exc:
+            errors.append(f"evidence source exceeds validation size cap: {path_value}: {exc}")
+            continue
         kind = item.get("kind")
         range_required = kind in BYTE_RANGE_REQUIRED_KINDS or item.get("binary_safe") is True
         start = item.get("start_byte")
@@ -279,7 +308,7 @@ def validate_evidence_index_artifact(audit_dir: Path) -> ValidationResult:
             errors.append(f"evidence {evidence_id} requires start_byte and end_byte")
             continue
         if start is None or end is None:
-            expected_hash = sha256_file(source)
+            expected_hash = sha256_range(data, 0, len(data))
         elif not isinstance(start, int) or not isinstance(end, int):
             errors.append(f"evidence {evidence_id} byte range must be integers")
             continue
@@ -313,13 +342,14 @@ def validate_manifest_artifacts(audit_dir: Path) -> ValidationResult:
     if not build_test_map.exists():
         errors.append(f"missing required artifact: {build_test_map}")
     else:
-        text = build_test_map.read_text(encoding="utf-8")
-        command_rows = [line for line in text.splitlines() if line.startswith("| ") and "`" in line]
-        for row in command_rows:
-            if "observed, not executed" not in row:
-                errors.append("BUILD_TEST_MAP.md command row missing observed-only label")
-        if command_rows and "target_repo_manifest_no_exec" not in text:
-            errors.append("BUILD_TEST_MAP.md command rows must record target_repo_manifest_no_exec policy")
+        text = read_validation_text(build_test_map, errors, "BUILD_TEST_MAP.md")
+        if text is not None:
+            command_rows = [line for line in text.splitlines() if line.startswith("| ") and "`" in line]
+            for row in command_rows:
+                if "observed, not executed" not in row:
+                    errors.append("BUILD_TEST_MAP.md command row missing observed-only label")
+            if command_rows and "target_repo_manifest_no_exec" not in text:
+                errors.append("BUILD_TEST_MAP.md command rows must record target_repo_manifest_no_exec policy")
     if manifests is not None:
         for index, record in enumerate(manifests.get("records", [])):
             if not isinstance(record, dict):
@@ -383,14 +413,17 @@ def validate_graph_artifacts(audit_dir: Path) -> ValidationResult:
         if payload is not None and not isinstance(payload.get("edges"), list):
             errors.append("CALL_GRAPH.json requires edges array")
     elif skipped.exists():
-        if "Reason:" not in skipped.read_text(encoding="utf-8"):
+        skipped_text = read_validation_text(skipped, errors, "CALL_GRAPH_SKIPPED.md")
+        if skipped_text is not None and "Reason:" not in skipped_text:
             errors.append("CALL_GRAPH_SKIPPED.md missing reason")
     else:
         errors.append("graph phase requires CALL_GRAPH.json or CALL_GRAPH_SKIPPED.md")
     if not architecture.exists():
         errors.append(f"missing required artifact: {architecture}")
-    elif "## Baseline" not in architecture.read_text(encoding="utf-8"):
-        errors.append("ARCHITECTURE.md missing baseline section")
+    else:
+        architecture_text = read_validation_text(architecture, errors, "ARCHITECTURE.md")
+        if architecture_text is not None and "## Baseline" not in architecture_text:
+            errors.append("ARCHITECTURE.md missing baseline section")
     if run_config is not None:
         graph = run_config.get("graph") if isinstance(run_config.get("graph"), dict) else {}
         centrality = graph.get("centrality") if isinstance(graph.get("centrality"), dict) else {}

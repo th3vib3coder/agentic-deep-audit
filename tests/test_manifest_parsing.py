@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import agentic_deep_audit.audit_manifest as audit_manifest
 from agentic_deep_audit.audit_validate import validate_audit, validate_manifest_artifacts
 from agentic_deep_audit.models import ARTIFACT_PATHS
 from agentic_deep_audit.policy import decide_command
@@ -199,6 +200,39 @@ def test_malformed_manifests_are_skipped_without_aborting(tmp_path: Path) -> Non
         assert records[path]["evidence_ids"]
         assert records[path]["skip_reason"].startswith("parse error:")
     assert records["go.mod"]["skipped"] is False
+
+
+def test_maven_manifest_entities_are_defused_without_aborting(tmp_path: Path) -> None:
+    repo = prepare_manifest_fixture(tmp_path)
+    (repo / "pom.xml").write_text(
+        """<?xml version="1.0"?>
+<!DOCTYPE project [
+  <!ENTITY payload "expanded">
+]>
+<project>&payload;</project>
+""",
+        encoding="utf-8",
+    )
+
+    result = run_cli("inventory", "--config", str(repo / "audit.config.yaml"), cwd=repo)
+
+    assert result.returncode == 0, result.stderr
+    manifests = json.loads((repo / "audit" / ARTIFACT_PATHS["MANIFESTS"]).read_text(encoding="utf-8"))
+    record = {item["path"]: item for item in manifests["records"]}["pom.xml"]
+    assert record["skipped"] is True
+    assert "EntitiesForbidden" in record["skip_reason"]
+
+
+def test_ci_workflow_size_cap_skips_commands_without_parsing(tmp_path: Path, monkeypatch) -> None:
+    workflow = tmp_path / "ci.yml"
+    workflow.write_text("name: CI\non:\n  push:\njobs:\n  test:\n    steps:\n      - run: npm test\n", encoding="utf-8")
+    monkeypatch.setattr(audit_manifest, "MAX_MANIFEST_FILE_BYTES", 8)
+
+    record = audit_manifest.parse_ci_workflow(workflow, ".github/workflows/ci.yml", "ev-000001")
+
+    assert record["skipped"] is True
+    assert record["commands"] == []
+    assert "exceeds size cap" in record["skip_reason"]
 
 
 def test_shape_malformed_package_json_is_skipped_without_aborting(tmp_path: Path) -> None:

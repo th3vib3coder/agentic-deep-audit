@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from .limits import FileSizeLimitError, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 from .sanitize import sanitize_markdown
 
@@ -68,8 +69,8 @@ def sanitizer_decision(repo_path: Path, relative_path: str, evidence_ids: list[s
     if suffix not in MARKDOWN_EXTENSIONS:
         return "not_markdown"
     try:
-        text = (repo_path / relative_path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        text = read_text_auto_capped(repo_path / relative_path, encoding="utf-8", errors="replace", label="surface markdown")
+    except (OSError, FileSizeLimitError):
         return "skipped"
     return sanitize_markdown(relative_path, text, evidence_id=evidence_ids[0] if evidence_ids else None).decision
 
@@ -98,7 +99,10 @@ def surface_record(
 
 
 def read_text(repo_path: Path, relative_path: str) -> str:
-    return (repo_path / relative_path).read_text(encoding="utf-8", errors="replace")
+    try:
+        return read_text_auto_capped(repo_path / relative_path, encoding="utf-8", errors="replace", label="surface source")
+    except (OSError, FileSizeLimitError):
+        return ""
 
 
 def route_records(records: list[dict[str, Any]], evidence_lookup: dict[str, list[str]], repo_path: Path) -> list[dict[str, Any]]:
@@ -213,8 +217,8 @@ def package_bin_records(repo_path: Path, evidence_lookup: dict[str, list[str]], 
     if not path.exists():
         return []
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        payload = json.loads(read_text_auto_capped(path, encoding="utf-8", label="surface package metadata"))
+    except (OSError, FileSizeLimitError, json.JSONDecodeError):
         return []
     bins = payload.get("bin")
     items = bins.items() if isinstance(bins, dict) else ([(payload.get("name") or "node-bin", bins)] if isinstance(bins, str) else [])
@@ -229,8 +233,8 @@ def cargo_bin_records(repo_path: Path, evidence_lookup: dict[str, list[str]], of
     if not path.exists():
         return []
     try:
-        payload = tomllib.loads(path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError:
+        payload = tomllib.loads(read_text_auto_capped(path, encoding="utf-8", label="surface pyproject metadata"))
+    except (OSError, FileSizeLimitError, tomllib.TOMLDecodeError):
         return []
     records: list[dict[str, Any]] = []
     for item in payload.get("bin") or []:

@@ -111,6 +111,27 @@ def test_host_pre_tool_event_blocks_mcp_interact_without_command(tmp_path: Path)
     assert attempts["attempts"][0]["command"] == ["__tool__", "mcp__Desktop_Commander__interact_with_process"]
 
 
+def test_host_pre_tool_event_blocks_unbalanced_shell_command(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SRC_ROOT)
+    event = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": "git log --oneline '", "audit_dir": str(audit_dir)}}
+
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN_ROOT / "hooks" / "pre_tool_policy.py")],
+        input=json.dumps(event),
+        cwd=PLUGIN_ROOT,
+        env=env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    attempts = json.loads((audit_dir / ARTIFACT_PATHS["BLOCKED_COMMANDS_ATTEMPTS"]).read_text(encoding="utf-8"))
+
+    assert result.returncode == 2
+    assert attempts["attempts"][0]["command"] == ["__invalid_command__"]
+
+
 def test_registered_hook_command_runs_without_pythonpath(tmp_path: Path) -> None:
     audit_dir = tmp_path / "audit"
     event = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": "npm test", "audit_dir": str(audit_dir)}}
@@ -118,23 +139,22 @@ def test_registered_hook_command_runs_without_pythonpath(tmp_path: Path) -> None
     env["AGENTIC_DEEP_AUDIT_PYTHON"] = sys.executable
     env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
     hooks = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-    command = hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-    assert "hook_misconfigured" in command
-    assert "pre_tool_policy.py" in command
-    assert not command.strip().lower().startswith("python ")
+    registered = hooks["hooks"]["PreToolUse"][0]["hooks"]
+    assert {hook["shell"] for hook in registered} == {"bash", "powershell"}
+    assert all("AGENTIC_DEEP_AUDIT_PYTHON" in hook["command"] for hook in registered)
+    assert all("--strict-runtime" in hook["command"] for hook in registered)
+    assert all("platform" not in hook for hook in registered)
+    assert all("args" not in hook for hook in registered)
 
-    if os.name == "nt":
-        result = subprocess.run(command, input=json.dumps(event), cwd=PLUGIN_ROOT, env=env, check=False, text=True, capture_output=True, shell=True)
-    else:
-        result = subprocess.run(
-            [env["AGENTIC_DEEP_AUDIT_PYTHON"], str(PLUGIN_ROOT / "hooks" / "pre_tool_policy.py")],
-            input=json.dumps(event),
-            cwd=PLUGIN_ROOT,
-            env=env,
-            check=False,
-            text=True,
-            capture_output=True,
-        )
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN_ROOT / "hooks" / "pre_tool_policy.py"), "--strict-runtime"],
+        input=json.dumps(event),
+        cwd=PLUGIN_ROOT,
+        env=env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
 
     assert result.returncode == 2
     assert "ModuleNotFoundError" not in result.stderr
@@ -159,6 +179,34 @@ def test_pre_tool_policy_strict_mode_fails_closed_without_runtime_env(tmp_path: 
 
     assert result.returncode == 2
     assert "hook_misconfigured" in result.stderr
+
+
+def test_pre_tool_policy_strict_mode_rejects_missing_configured_runtime(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SRC_ROOT)
+    env["AGENTIC_DEEP_AUDIT_PYTHON"] = str(tmp_path / "missing-python")
+    event = {"tool_name": "Read", "cwd": str(tmp_path), "tool_input": {"file_path": "README.md", "audit_dir": str(tmp_path / "audit")}}
+
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN_ROOT / "hooks" / "pre_tool_policy.py"), "--strict-runtime"],
+        input=json.dumps(event),
+        cwd=PLUGIN_ROOT,
+        env=env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "AGENTIC_DEEP_AUDIT_PYTHON does not exist" in result.stderr
+
+
+def test_registered_bash_hook_fails_closed_without_runtime_env() -> None:
+    hooks = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    bash_hook = next(hook for hook in hooks["hooks"]["PreToolUse"][0]["hooks"] if hook["shell"] == "bash")
+
+    assert "hook_misconfigured" in bash_hook["command"]
+    assert "exit 2" in bash_hook["command"]
 
 
 def test_markdown_prompt_injection_fixture_is_blocked_from_context() -> None:

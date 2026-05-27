@@ -29,7 +29,16 @@ def remove_generated_path(path: Path) -> None:
     if not path.exists():
         return
     if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path, onerror=_retry_remove_readonly)
+        last_error: OSError | None = None
+        for _attempt in range(5):
+            try:
+                shutil.rmtree(path, onerror=_retry_remove_readonly)
+                return
+            except OSError as exc:
+                last_error = exc
+                time.sleep(0.1)
+        if last_error is not None:
+            raise last_error
     else:
         try:
             path.unlink()

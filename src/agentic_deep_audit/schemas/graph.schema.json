@@ -2,12 +2,114 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Canonical Graph",
   "type": "object",
-  "required": ["schema_version", "repo", "nodes", "edges"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repo",
+    "nodes",
+    "edges"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "repo": {"type": "object"},
-    "nodes": {"type": "array", "items": {"type": "object", "required": ["id", "type", "label", "evidence_ids"], "properties": {"id": {"type": "string"}, "type": {"enum": ["repo", "module", "symbol", "feature", "pattern", "risk", "reuse", "artifact"]}, "label": {"type": "string"}, "evidence_ids": {"type": "array", "items": {"type": "string"}}}}},
-    "edges": {"type": "array", "items": {"type": "object", "required": ["source", "target", "type", "weight", "conditional", "dynamic", "evidence_ids"], "properties": {"source": {"type": "string"}, "target": {"type": "string"}, "type": {"enum": ["contains", "depends_on", "implements", "documents", "evidences", "risks", "reuses"]}, "weight": {"type": ["number", "integer"]}, "conditional": {"type": "boolean"}, "dynamic": {"type": "boolean"}, "evidence_ids": {"type": "array", "items": {"type": "string"}}}}},
-    "derivations": {"type": "object"}
+    "schema_version": {
+      "type": "string"
+    },
+    "repo": {
+      "type": "object"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "label",
+          "evidence_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "repo",
+              "module",
+              "symbol",
+              "feature",
+              "pattern",
+              "risk",
+              "reuse",
+              "artifact"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ev-[0-9]{6,}$"
+            }
+          }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "source",
+          "target",
+          "type",
+          "weight",
+          "conditional",
+          "dynamic",
+          "evidence_ids"
+        ],
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "contains",
+              "depends_on",
+              "implements",
+              "documents",
+              "evidences",
+              "risks",
+              "reuses"
+            ]
+          },
+          "weight": {
+            "type": [
+              "number",
+              "integer"
+            ]
+          },
+          "conditional": {
+            "type": "boolean"
+          },
+          "dynamic": {
+            "type": "boolean"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ev-[0-9]{6,}$"
+            }
+          }
+        }
+      }
+    },
+    "derivations": {
+      "type": "object"
+    }
   }
 }

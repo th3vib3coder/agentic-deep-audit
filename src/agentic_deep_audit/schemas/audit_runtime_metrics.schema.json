@@ -2,17 +2,55 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Audit Runtime Metrics",
   "type": "object",
-  "required": ["schema_version", "run_id", "phase_durations_ms", "files_processed", "bytes_processed", "output_bytes", "tool_failures"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "phase_durations_ms",
+    "files_processed",
+    "bytes_processed",
+    "output_bytes",
+    "tool_failures"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "run_id": {"type": "string"},
-    "phase_durations_ms": {"type": "object"},
-    "files_processed": {"type": "integer"},
-    "bytes_processed": {"type": "integer"},
-    "output_bytes": {"type": "integer"},
-    "cache_hits": {"type": "integer"},
-    "cache_misses": {"type": "integer"},
-    "tool_failures": {"type": "integer"},
-    "notes": {"type": "array", "items": {"type": "string"}}
+    "schema_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "phase_durations_ms": {
+      "type": "object"
+    },
+    "files_processed": {
+      "type": "integer"
+    },
+    "bytes_processed": {
+      "type": "integer"
+    },
+    "output_bytes": {
+      "type": "integer"
+    },
+    "cache_hits": {
+      "type": "integer"
+    },
+    "cache_misses": {
+      "type": "integer"
+    },
+    "tool_failures": {
+      "type": "integer"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "memory_peak": {
+      "type": "object"
+    },
+    "token_proxy": {
+      "type": "object"
+    }
   }
 }

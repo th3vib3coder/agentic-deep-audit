@@ -31,7 +31,7 @@ def available_evidence(evidence_index: dict[str, Any]) -> set[str]:
 
 def validate_markdown_evidence(path: Path, available: set[str], errors: list[str]) -> None:
     text = path.read_text(encoding="utf-8")
-    for evidence_id in re.findall(r"ev-\d{6}", text):
+    for evidence_id in re.findall(r"ev-\d{6,}", text):
         if evidence_id not in available:
             errors.append(f"{path.name} references unreachable evidence id: {evidence_id}")
 

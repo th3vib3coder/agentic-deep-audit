@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .limits import MAX_AUDIT_FILE_BYTES, decode_text_bytes, read_bytes_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -55,10 +56,10 @@ def sha256_range(data: bytes, start_byte: int, end_byte: int) -> str:
 
 
 def detect_line_ending(text: str) -> str:
-    crlf = "\r\n" in text
-    bare_cr = any(char == "\r" and text[index : index + 2] != "\r\n" for index, char in enumerate(text))
-    lf = any(char == "\n" and (index == 0 or text[index - 1] != "\r") for index, char in enumerate(text))
-    observed = [name for name, present in [("CRLF", crlf), ("CR", bare_cr), ("LF", lf)] if present]
+    crlf_count = text.count("\r\n")
+    cr_count = text.count("\r") - crlf_count
+    lf_count = text.count("\n") - crlf_count
+    observed = [name for name, count in [("CRLF", crlf_count), ("CR", cr_count), ("LF", lf_count)] if count > 0]
     if not observed:
         return "none"
     return observed[0] if len(observed) == 1 else "mixed"
@@ -66,7 +67,7 @@ def detect_line_ending(text: str) -> str:
 
 def build_text_view(data: bytes) -> TextView | None:
     try:
-        original = data.decode("utf-8")
+        original = decode_text_bytes(data)
     except UnicodeDecodeError:
         return None
     line_ending = detect_line_ending(original)
@@ -84,7 +85,7 @@ def build_text_view(data: bytes) -> TextView | None:
 
 
 def read_file_bytes(path: Path) -> bytes:
-    return path.read_bytes()
+    return read_bytes_capped(path, MAX_AUDIT_FILE_BYTES, "evidence file")
 
 
 def file_evidence_for_record(record: dict[str, Any], repo_path: Path, allocator: EvidenceIdAllocator) -> dict[str, Any]:

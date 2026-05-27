@@ -12,6 +12,7 @@ from agentic_deep_audit.mcp_policy import redact_host_metadata
 from agentic_deep_audit.models import PLUGIN_ROOT
 from agentic_deep_audit.policy import decide_command, decide_network, load_blocked_commands_policy, load_default_network_policy
 from agentic_deep_audit.sanitize import sanitize_markdown
+from agentic_deep_audit.validate_json_schema import validate_json_artifact_schemas
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +64,10 @@ def test_command_allowlist_uses_token_exact_matching() -> None:
     assert not decide_command(["git", "log", "--exec=sh"], origin="plugin_allowlist").allowed
     for arg in ["--super-prefix", "--namespace", "--no-pager", "-P"]:
         assert not decide_command(["git", arg, "status"], origin="plugin_allowlist").allowed
+    for arg in ["--super-prefix=evil", "--namespace=evil"]:
+        assert not decide_command(["git", "log", arg], origin="plugin_allowlist").allowed
+    for arg in ['"--super-prefix=evil"', '"--namespace=evil"']:
+        assert not decide_command(["git", "log", arg], origin="plugin_allowlist").allowed
     assert not decide_command(["docker", "exec", "container", "sh"], origin="plugin_allowlist").allowed
     assert not decide_command(["podman", "run", "alpine"], origin="plugin_allowlist").allowed
     assert not decide_command(["docker-compose", "up"], origin="plugin_allowlist").allowed
@@ -108,6 +113,36 @@ def test_network_precedence_and_source_payload_blocking() -> None:
     assert decide_network("https://attacker.com@api.github.com/path", policy=policy).policy_rule == "userinfo_not_allowed"
     assert decide_network("ftp://api.github.com/data", policy=policy).policy_rule == "unsupported_scheme"
     assert decide_network("https://[::1", policy=policy).policy_rule == "invalid_url"
+
+
+def test_blocked_commands_allowlist_schema_is_bound_to_artifact_path(tmp_path: Path) -> None:
+    policy_dir = tmp_path / "policies"
+    policy_dir.mkdir()
+    policy = load_blocked_commands_policy()
+    policy["unexpected"] = True
+    (policy_dir / "BLOCKED_COMMANDS_ALLOWLIST.json").write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+
+    errors = validate_json_artifact_schemas(tmp_path)
+
+    assert any("blocked_commands_schema: policies/BLOCKED_COMMANDS_ALLOWLIST.json" in error for error in errors)
+
+
+def test_run_config_schema_is_bound_to_artifact_path(tmp_path: Path) -> None:
+    run_config = {
+        "schema_version": "1.0",
+        "repo": {"kind": "local", "path": ".", "github": None},
+        "profile": "minimal",
+        "mode": "source-audit",
+        "output_dir": "audit",
+        "target_context": "MIT downstream",
+        "binary_triage_consent": False,
+        "unexpected": True,
+    }
+    (tmp_path / "RUN_CONFIG.json").write_text(json.dumps(run_config, indent=2) + "\n", encoding="utf-8")
+
+    errors = validate_json_artifact_schemas(tmp_path)
+
+    assert any("audit_config_schema: RUN_CONFIG.json" in error and "unexpected" in error for error in errors)
 
 
 def test_untrusted_markdown_sanitizer_blocks_agentic_markers() -> None:

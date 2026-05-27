@@ -2,9 +2,96 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "License Cards",
   "type": "object",
-  "required": ["schema_version", "cards"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "cards"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "cards": {"type": "array", "items": {"type": "object", "required": ["card_id", "kind", "declared_license", "confidence", "detection_method", "requires_human_decision", "evidence_ids"], "properties": {"card_id": {"type": "string"}, "kind": {"enum": ["file", "dependency"]}, "path": {"type": ["string", "null"]}, "component": {"type": ["string", "null"]}, "declared_license": {"type": ["string", "null"]}, "detected_license": {"type": ["string", "null"]}, "confidence": {"enum": ["high", "medium", "low"]}, "detection_method": {"type": "string"}, "conflicts_with_root": {"type": "boolean"}, "requires_human_decision": {"type": "boolean"}, "evidence_ids": {"type": "array", "items": {"type": "string"}}}}}
+    "schema_version": {
+      "type": "string"
+    },
+    "cards": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "card_id",
+          "kind",
+          "declared_license",
+          "confidence",
+          "detection_method",
+          "requires_human_decision",
+          "evidence_ids"
+        ],
+        "properties": {
+          "card_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "file",
+              "dependency"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "component": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "declared_license": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detected_license": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "confidence": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "detection_method": {
+            "type": "string"
+          },
+          "conflicts_with_root": {
+            "type": "boolean"
+          },
+          "requires_human_decision": {
+            "type": "boolean"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ev-[0-9]{6,}$"
+            }
+          }
+        }
+      }
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "summary": {
+      "type": "object"
+    }
   }
 }

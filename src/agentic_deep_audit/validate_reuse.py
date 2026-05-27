@@ -33,7 +33,7 @@ def validate_evidence_ids(location: str, evidence_ids: Any, available: set[str],
         errors.append(f"{location} requires non-empty evidence_ids")
         return
     for evidence_id in evidence_ids:
-        if not isinstance(evidence_id, str) or not re.fullmatch(r"ev-\d{6}", evidence_id):
+        if not isinstance(evidence_id, str) or not re.fullmatch(r"ev-\d{6,}", evidence_id):
             errors.append(f"{location} invalid evidence id: {evidence_id!r}")
         elif evidence_id not in available:
             errors.append(f"{location} references unreachable evidence id: {evidence_id}")

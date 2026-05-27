@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 from collections import Counter
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit_evidence import evidence_for_records
-from .config import sha256_file
+from .limits import FileSizeLimitError, MAX_AUDIT_FILE_BYTES, read_bytes_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -34,6 +35,7 @@ DATA_EXTENSIONS = {".csv", ".tsv", ".jsonl", ".parquet", ".feather", ".h5", ".hd
 ASSET_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".mp4", ".webm"}
 GENERATED_DIRS = {"generated", "dist", "build", "coverage"}
 VENDORED_DIRS = {"vendor", "vendored", "third_party", "third-party", "node_modules"}
+TEXT_BOMS = (b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")
 
 
 def normalize_relative(path: Path, root: Path) -> str:
@@ -62,6 +64,8 @@ def should_include(path_normalized: str, includes: list[str], excludes: list[str
 
 
 def is_probably_binary(data: bytes) -> bool:
+    if data.startswith(TEXT_BOMS):
+        return False
     if b"\x00" in data:
         return True
     if not data:
@@ -97,7 +101,7 @@ def classify_kind(path_normalized: str, binary: bool) -> str:
 
 
 def root_doc_status(root: Path) -> list[dict[str, Any]]:
-    files = [path for path in root.iterdir() if path.is_file()]
+    files = [path for path in root.iterdir() if path.is_file() and not path.is_symlink()]
     results: list[dict[str, Any]] = []
     for stem in ROOT_DOC_STEMS:
         found = next((path for path in files if path.stem.upper() == stem or path.name.upper() == stem), None)
@@ -122,21 +126,28 @@ def scan_files(run_config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[d
     records: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
     for path in sorted(repo_path.rglob("*")):
-        if not path.is_file():
-            continue
         path_normalized = normalize_relative(path, repo_path)
         include, reason = should_include(path_normalized, includes, excludes)
         if not include:
             skipped.append({"path": path_normalized, "reason": reason or "excluded"})
             continue
-        data = path.read_bytes()
+        if path.is_symlink():
+            skipped.append({"path": path_normalized, "reason": "symlink skipped"})
+            continue
+        if not path.is_file():
+            continue
+        try:
+            data = read_bytes_capped(path, MAX_AUDIT_FILE_BYTES, "inventory file")
+        except FileSizeLimitError as exc:
+            skipped.append({"path": path_normalized, "reason": str(exc)})
+            continue
         binary = is_probably_binary(data)
         records.append(
             {
                 "path": path_normalized,
                 "path_normalized": path_normalized,
                 "size_bytes": len(data),
-                "sha256": sha256_file(path),
+                "sha256": hashlib.sha256(data).hexdigest(),
                 "extension": path.suffix.lower(),
                 "language": path.suffix.lower().lstrip(".") or None,
                 "kind": classify_kind(path_normalized, binary),

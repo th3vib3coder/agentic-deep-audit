@@ -290,6 +290,7 @@ def progress_markdown() -> str:
 
 def bootstrap_audit(run_config: dict[str, Any], cwd: Path | None = None) -> Path:
     base = (cwd or Path.cwd()).resolve()
+    run_config.setdefault("schema_version", "1.0")
     audit_dir = resolve_output_dir(str(run_config["output_dir"]), base)
     audit_dir.mkdir(parents=True, exist_ok=True)
 

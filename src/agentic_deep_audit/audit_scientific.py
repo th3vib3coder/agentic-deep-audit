@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .limits import FileSizeLimitError, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -35,8 +36,8 @@ def simple_key_values(text: str) -> dict[str, str]:
 
 def read_text(repo_path: Path, path_value: str) -> str:
     try:
-        return (repo_path / path_value).read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        return read_text_auto_capped(repo_path / path_value, encoding="utf-8", errors="replace", label="scientific source")
+    except (OSError, FileSizeLimitError):
         return ""
 
 

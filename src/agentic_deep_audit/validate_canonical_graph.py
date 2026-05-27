@@ -12,7 +12,7 @@ from .audit_canonical_graph import EDGE_TYPES, NODE_TYPES, stable_slug
 from .models import ARTIFACT_PATHS
 
 
-EVIDENCE_RE = re.compile(r"ev-\d{6}")
+EVIDENCE_RE = re.compile(r"ev-\d{6,}")
 DERIVED_WIKI_PAGES = {"wiki/005_graph_mermaid.md"}
 
 

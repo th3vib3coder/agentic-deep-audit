@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_deep_audit.audit_evidence import sha256_range, validate_claims_reach_evidence
+from agentic_deep_audit.audit_evidence import build_text_view, detect_line_ending, sha256_range, validate_claims_reach_evidence
 from agentic_deep_audit.audit_validate import validate_audit, validate_evidence_index_artifact
 from agentic_deep_audit.models import ARTIFACT_PATHS
 
@@ -138,6 +138,31 @@ def test_crlf_text_evidence_preserves_line_metadata_and_byte_seek(tmp_path: Path
     assert evidence["end_byte"] == len(data)
     assert sha256_range(data, evidence["start_byte"], evidence["end_byte"]) == evidence["sha256"]
     assert hashlib.sha256(data[evidence["start_byte"] : evidence["end_byte"]]).hexdigest() == evidence["sha256"]
+
+
+def test_utf16_bom_text_evidence_is_line_addressable(tmp_path: Path) -> None:
+    repo = prepare_fixture(tmp_path)
+    scripts = repo / "scripts"
+    scripts.mkdir()
+    (scripts / "setup.ps1").write_bytes("Write-Host 'ok'\r\n".encode("utf-16"))
+    config = write_config(repo)
+
+    result = run_cli("inventory", "--config", str(config), cwd=repo)
+
+    assert result.returncode == 0, result.stderr
+    file_index = json.loads((repo / "audit" / ARTIFACT_PATHS["FILE_INDEX"]).read_text(encoding="utf-8"))
+    records = {record["path"]: record for record in file_index["records"]}
+    evidence = by_path(load_evidence(repo / "audit"))["scripts/setup.ps1"]
+    assert records["scripts/setup.ps1"]["binary"] is False
+    assert evidence["kind"] == "file_line"
+    assert evidence["line_ending_original"] == "CRLF"
+
+
+def test_line_ending_detection_uses_counting_path() -> None:
+    text = ("alpha\r\nbeta\r\n" * 1000) + "gamma\n"
+
+    assert detect_line_ending(text) == "mixed"
+    assert build_text_view("Write-Host 'ok'\r\n".encode("utf-16")) is not None
 
 
 def test_binary_evidence_has_byte_range_and_no_line_range(tmp_path: Path) -> None:

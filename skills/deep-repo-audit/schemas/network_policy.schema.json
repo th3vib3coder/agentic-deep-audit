@@ -2,15 +2,54 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Network Policy",
   "type": "object",
-  "required": ["schema_version", "default", "allowed_domains", "denied_domains", "redaction_rules", "send_source_code", "send_dependency_names"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "default",
+    "allowed_domains",
+    "denied_domains",
+    "redaction_rules",
+    "send_source_code",
+    "send_dependency_names"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "default": {"enum": ["deny"]},
-    "allowed_domains": {"type": "array", "items": {"type": "string"}},
-    "denied_domains": {"type": "array", "items": {"type": "string"}},
-    "rate_limits": {"type": "array", "items": {"type": "object"}},
-    "redaction_rules": {"type": "array", "items": {"type": "string"}},
-    "send_source_code": {"type": "boolean"},
-    "send_dependency_names": {"type": "boolean"}
+    "schema_version": {
+      "type": "string"
+    },
+    "default": {
+      "enum": [
+        "deny"
+      ]
+    },
+    "allowed_domains": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "denied_domains": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rate_limits": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "redaction_rules": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "send_source_code": {
+      "type": "boolean"
+    },
+    "send_dependency_names": {
+      "type": "boolean"
+    }
   }
 }

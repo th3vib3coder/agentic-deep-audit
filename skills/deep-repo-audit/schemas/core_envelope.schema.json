@@ -2,15 +2,50 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Core JSON Envelope",
   "type": "object",
-  "required": ["schema_version", "run_id", "repo", "generated_at", "source_artifacts", "records", "skipped", "skip_reason"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "repo",
+    "generated_at",
+    "source_artifacts",
+    "records",
+    "skipped",
+    "skip_reason"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "run_id": {"type": "string"},
-    "repo": {"type": "object"},
-    "generated_at": {"type": "string"},
-    "source_artifacts": {"type": "array", "items": {"type": "string"}},
-    "records": {"type": "array", "items": {"type": "object"}},
-    "skipped": {"type": "boolean"},
-    "skip_reason": {"type": ["string", "null"]}
+    "schema_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "repo": {
+      "type": "object"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "source_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "skipped": {
+      "type": "boolean"
+    },
+    "skip_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   }
 }

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .limits import FileSizeLimitError, read_bytes_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -64,7 +65,10 @@ def root_license(file_index: dict[str, Any], repo_path: Path, evidence_lookup: d
         path_value = record_path(record)
         if "/" in path_value or Path(path_value).name.lower() not in LICENSE_NAMES:
             continue
-        text = (repo_path / path_value).read_text(encoding="utf-8", errors="replace")
+        try:
+            text = read_text_auto_capped(repo_path / path_value, encoding="utf-8", errors="replace", label="license source")
+        except (OSError, FileSizeLimitError):
+            continue
         spdx = spdx_from_text(text)
         if spdx:
             return spdx, evidence_lookup.get(path_value), "spdx_header", "high"
@@ -79,8 +83,8 @@ def package_metadata(repo_path: Path, file_index: dict[str, Any], evidence_looku
         path_value = record_path(record) if isinstance(record, dict) else ""
         if isinstance(record, dict) and path_value.endswith("package.json"):
             try:
-                payload = json.loads((repo_path / path_value).read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+                payload = json.loads(read_text_auto_capped(repo_path / path_value, encoding="utf-8", label="package metadata"))
+            except (OSError, json.JSONDecodeError, FileSizeLimitError):
                 return {}, evidence_lookup.get(path_value)
             return (payload if isinstance(payload, dict) else {}), evidence_lookup.get(path_value)
     return {}, None
@@ -98,7 +102,10 @@ def file_license_card(card_id: int, record: dict[str, Any], repo_path: Path, evi
         return {"card_id": f"lic-{card_id:06d}", "kind": "file", "path": path_value, "component": None, "declared_license": None, "detected_license": None, "confidence": "low", "detection_method": "skipped:generated_file", "conflicts_with_root": False, "requires_human_decision": True, "evidence_ids": [evidence_id] if evidence_id else [], "skipped_reason": "generated file requires source template review"}
     if parts & VENDORED_PARTS:
         return {"card_id": f"lic-{card_id:06d}", "kind": "file", "path": path_value, "component": None, "declared_license": None, "detected_license": None, "confidence": "low", "detection_method": "skipped:vendored_file", "conflicts_with_root": False, "requires_human_decision": True, "evidence_ids": [evidence_id] if evidence_id else [], "skipped_reason": "vendored file requires upstream license review"}
-    text = (repo_path / path_value).read_text(encoding="utf-8", errors="replace")
+    try:
+        text = read_text_auto_capped(repo_path / path_value, encoding="utf-8", errors="replace", label="license source")
+    except (OSError, FileSizeLimitError) as exc:
+        return {"card_id": f"lic-{card_id:06d}", "kind": "file", "path": path_value, "component": None, "declared_license": root_value, "detected_license": root_value, "confidence": "low", "detection_method": "skipped:file_read_limit", "conflicts_with_root": False, "requires_human_decision": True, "evidence_ids": [evidence_id] if evidence_id else [], "skipped_reason": str(exc)}
     spdx = spdx_from_text(text)
     if spdx:
         return {"card_id": f"lic-{card_id:06d}", "kind": "file", "path": path_value, "component": None, "declared_license": spdx, "detected_license": spdx, "confidence": "high", "detection_method": "spdx_header", "conflicts_with_root": bool(root_value and spdx != root_value), "requires_human_decision": bool(root_value and spdx != root_value), "evidence_ids": [evidence_id] if evidence_id else []}
@@ -209,7 +216,12 @@ def binary_artifacts(run_config: dict[str, Any], file_index: dict[str, Any], rep
         if not isinstance(record, dict) or record.get("binary") is not True:
             continue
         path_value = record_path(record)
-        data = (repo_path / path_value).read_bytes()
+        try:
+            data = read_bytes_capped(repo_path / path_value, label="binary artifact")
+        except (OSError, FileSizeLimitError) as exc:
+            kind = binary_kind(path_value)
+            artifacts.append({"artifact_id": f"bin-{len(artifacts) + 1:06d}", "path": path_value, "kind": kind, "size_bytes": int(record.get("size_bytes") or 0), "mime_detected": None, "extension": Path(path_value).suffix.lower(), "source_counterpart": None, "triage_triggered": False, "requires_operator_consent": True, "evidence_ids": [evidence_lookup[path_value]] if evidence_lookup.get(path_value) else [], "mime_mismatch": False, "skipped_reason": str(exc)})
+            continue
         mime = detected_mime(data)
         kind = binary_kind(path_value)
         artifacts.append({"artifact_id": f"bin-{len(artifacts) + 1:06d}", "path": path_value, "kind": kind, "size_bytes": int(record.get("size_bytes") or 0), "mime_detected": mime, "extension": Path(path_value).suffix.lower(), "source_counterpart": None, "triage_triggered": consent, "requires_operator_consent": not consent, "evidence_ids": [evidence_lookup[path_value]] if evidence_lookup.get(path_value) else [], "mime_mismatch": mime_mismatch(path_value, mime)})

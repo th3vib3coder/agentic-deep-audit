@@ -2,10 +2,89 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Scientific Provenance",
   "type": "object",
-  "required": ["schema_version", "records"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "records"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "run_id": {"type": ["string", "null"]},
-    "records": {"type": "array", "items": {"type": "object", "required": ["record_id", "category", "observed_value", "evidence_ids", "confidence", "detection_method", "requires_human_decision"], "properties": {"record_id": {"type": "string"}, "category": {"enum": ["dataset_provenance", "pipeline_version", "tool_version", "parameters_and_seeds", "genome_build", "organism_taxon", "annotation_version", "sample_cell_gene_ids", "normalization_assumptions", "analysis_confounder", "batch_confounder_model", "notebook_execution_order", "model_checkpoint", "reproducibility_makefile"]}, "observed_value": {"type": "object"}, "evidence_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "confidence": {"enum": ["high", "medium", "low"]}, "detection_method": {"enum": ["config_file_value", "manifest_or_lockfile", "notebook_metadata", "dockerfile_image_tag", "comment_or_docstring", "heuristic_inference"]}, "requires_human_decision": {"type": "boolean"}}}}
+    "schema_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "record_id",
+          "category",
+          "observed_value",
+          "evidence_ids",
+          "confidence",
+          "detection_method",
+          "requires_human_decision"
+        ],
+        "properties": {
+          "record_id": {
+            "type": "string"
+          },
+          "category": {
+            "enum": [
+              "dataset_provenance",
+              "pipeline_version",
+              "tool_version",
+              "parameters_and_seeds",
+              "genome_build",
+              "organism_taxon",
+              "annotation_version",
+              "sample_cell_gene_ids",
+              "normalization_assumptions",
+              "analysis_confounder",
+              "batch_confounder_model",
+              "notebook_execution_order",
+              "model_checkpoint",
+              "reproducibility_makefile"
+            ]
+          },
+          "observed_value": {
+            "type": "object"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ev-[0-9]{6,}$"
+            },
+            "minItems": 1
+          },
+          "confidence": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "detection_method": {
+            "enum": [
+              "config_file_value",
+              "manifest_or_lockfile",
+              "notebook_metadata",
+              "dockerfile_image_tag",
+              "comment_or_docstring",
+              "heuristic_inference"
+            ]
+          },
+          "requires_human_decision": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
   }
 }

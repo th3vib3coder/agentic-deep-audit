@@ -12,6 +12,7 @@ from typing import Any
 
 from .adapters.base import AdapterStatus, append_tool_status
 from .audit_canonical_graph import run_canonical_graph_outputs
+from .limits import FileSizeLimitError, read_bytes_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -94,6 +95,14 @@ def line_span(data: bytes, start_line: int, end_line: int) -> dict[str, int]:
         "start_byte": starts[start_index],
         "end_byte": max(starts[start_index], end_byte),
     }
+
+
+def read_source_bytes(state: GraphState, path: str) -> bytes | None:
+    try:
+        return read_bytes_capped(state.repo_path / path, label="graph source")
+    except FileSizeLimitError as exc:
+        state.coverage_notes.append(f"{path}: graph parse skipped: {exc}")
+        return None
 
 
 def add_module_node(state: GraphState, path: str) -> None:
@@ -277,7 +286,9 @@ def call_name(node: ast.AST) -> tuple[str, bool]:
 
 
 def parse_python(state: GraphState, path: str) -> None:
-    data = (state.repo_path / path).read_bytes()
+    data = read_source_bytes(state, path)
+    if data is None:
+        return
     try:
         tree = ast.parse(data.decode("utf-8"), filename=path)
     except (SyntaxError, UnicodeDecodeError) as exc:
@@ -287,7 +298,9 @@ def parse_python(state: GraphState, path: str) -> None:
 
 
 def parse_js_ts(state: GraphState, path: str) -> None:
-    data = (state.repo_path / path).read_bytes()
+    data = read_source_bytes(state, path)
+    if data is None:
+        return
     text = data.decode("utf-8", errors="replace")
     evidence_ids = state.evidence_by_path.get(path, [])
     conditional_depth = 0
@@ -311,7 +324,10 @@ def parse_js_ts(state: GraphState, path: str) -> None:
 
 
 def parse_go(state: GraphState, path: str) -> None:
-    text = (state.repo_path / path).read_text(encoding="utf-8", errors="replace")
+    data = read_source_bytes(state, path)
+    if data is None:
+        return
+    text = data.decode("utf-8", errors="replace")
     evidence_ids = state.evidence_by_path.get(path, [])
     for line_number, line in enumerate(text.splitlines(), start=1):
         import_match = re.search(r'"([^"]+)"', line) if "import" in line or line.strip().startswith('"') else None
@@ -320,12 +336,15 @@ def parse_go(state: GraphState, path: str) -> None:
             add_edge(state, node_id(path), package_id(import_match.group(1)), "imports", 1.0, False, False, evidence_ids)
         func_match = re.search(r"\bfunc\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)", line)
         if func_match:
-            add_symbol(state, path, func_match.group(1), "function", line_span((state.repo_path / path).read_bytes(), line_number, line_number), True, evidence_ids)
+            add_symbol(state, path, func_match.group(1), "function", line_span(data, line_number, line_number), True, evidence_ids)
     state.coverage_notes.append(f"{path}: go parser minimal")
 
 
 def parse_rust(state: GraphState, path: str) -> None:
-    text = (state.repo_path / path).read_text(encoding="utf-8", errors="replace")
+    data = read_source_bytes(state, path)
+    if data is None:
+        return
+    text = data.decode("utf-8", errors="replace")
     evidence_ids = state.evidence_by_path.get(path, [])
     for line_number, line in enumerate(text.splitlines(), start=1):
         match = re.search(r"\b(?:use|mod)\s+([A-Za-z_][\w:]*)", line)
@@ -335,12 +354,15 @@ def parse_rust(state: GraphState, path: str) -> None:
             add_edge(state, node_id(path), package_id(name), "imports", 1.0, False, False, evidence_ids)
         func_match = re.search(r"\bfn\s+([A-Za-z_]\w*)", line)
         if func_match:
-            add_symbol(state, path, func_match.group(1), "function", line_span((state.repo_path / path).read_bytes(), line_number, line_number), not func_match.group(1).startswith("_"), evidence_ids)
+            add_symbol(state, path, func_match.group(1), "function", line_span(data, line_number, line_number), not func_match.group(1).startswith("_"), evidence_ids)
     state.coverage_notes.append(f"{path}: rust parser minimal")
 
 
 def parse_java_kotlin(state: GraphState, path: str) -> None:
-    text = (state.repo_path / path).read_text(encoding="utf-8", errors="replace")
+    data = read_source_bytes(state, path)
+    if data is None:
+        return
+    text = data.decode("utf-8", errors="replace")
     evidence_ids = state.evidence_by_path.get(path, [])
     for line_number, line in enumerate(text.splitlines(), start=1):
         match = re.search(r"\bimport\s+([A-Za-z_][\w.]*)(?:\.\*)?;", line)
@@ -349,7 +371,7 @@ def parse_java_kotlin(state: GraphState, path: str) -> None:
             add_edge(state, node_id(path), package_id(match.group(1)), "imports", 1.0, False, False, evidence_ids)
         class_match = re.search(r"\b(?:class|interface|object)\s+([A-Za-z_]\w*)", line)
         if class_match:
-            add_symbol(state, path, class_match.group(1), "class", line_span((state.repo_path / path).read_bytes(), line_number, line_number), True, evidence_ids)
+            add_symbol(state, path, class_match.group(1), "class", line_span(data, line_number, line_number), True, evidence_ids)
     state.coverage_notes.append(f"{path}: java/kotlin parser minimal")
 
 

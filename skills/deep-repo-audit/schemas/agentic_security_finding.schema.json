@@ -2,9 +2,113 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Agentic Security Findings",
   "type": "object",
-  "required": ["schema_version", "findings"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "findings"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "findings": {"type": "array", "items": {"type": "object", "required": ["finding_id", "code", "target", "severity", "confidence", "evidence_ids", "recommendation"], "properties": {"finding_id": {"type": "string"}, "code": {"enum": ["E001", "E002", "E003", "E004", "W007", "W008", "W009", "W010", "W011", "W012", "W013", "W014", "W015", "W016", "W017", "W018"]}, "target": {"type": "string"}, "pattern_matched": {"type": ["string", "null"]}, "severity": {"enum": ["critical", "high", "medium", "low", "info"]}, "confidence": {"enum": ["high", "medium", "low"]}, "evidence_ids": {"type": "array", "items": {"type": "string"}}, "source": {"type": "string"}, "recommendation": {"type": "string"}, "requires_human_decision": {"type": "boolean"}}}}
+    "schema_version": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "finding_id",
+          "code",
+          "target",
+          "severity",
+          "confidence",
+          "evidence_ids",
+          "recommendation"
+        ],
+        "properties": {
+          "finding_id": {
+            "type": "string"
+          },
+          "code": {
+            "enum": [
+              "E001",
+              "E002",
+              "E003",
+              "E004",
+              "W007",
+              "W008",
+              "W009",
+              "W010",
+              "W011",
+              "W012",
+              "W013",
+              "W014",
+              "W015",
+              "W016",
+              "W017",
+              "W018"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "pattern_matched": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info"
+            ]
+          },
+          "confidence": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ev-[0-9]{6,}$"
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "recommendation": {
+            "type": "string"
+          },
+          "requires_human_decision": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scanned_files": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "skipped_files": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   }
 }

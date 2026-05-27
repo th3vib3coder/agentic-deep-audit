@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
+import agentic_deep_audit.audit_telemetry as audit_telemetry
 from agentic_deep_audit.audit_telemetry import CATEGORIES, default_parameters, is_bot_author, issue_pr_record, normalize_identity, pseudonymize_identity
+from agentic_deep_audit.limits import FileSizeLimitError
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 
@@ -144,6 +146,19 @@ def test_bot_filter_and_identity_normalization_are_deterministic() -> None:
     assert normalize_identity("Alias", "ALIAS@EXAMPLE.COM", {"alias@example.com": "dev@example.com"}) == "dev@example.com"
     assert normalize_identity("No Email", "", {}) == "no email"
     assert pseudonymize_identity("dev@example.com").startswith("id_")
+
+
+def test_mailmap_size_limit_degrades_to_empty_mapping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".mailmap").write_text("Dev <dev@example.com> Alias <alias@example.com>\n", encoding="utf-8")
+
+    def raise_size_limit(*_args, **_kwargs):
+        raise FileSizeLimitError("test cap")
+
+    monkeypatch.setattr(audit_telemetry, "read_text_auto_capped", raise_size_limit)
+
+    assert audit_telemetry.load_mailmap(repo) == {}
 
 
 def test_git_telemetry_changelog_identity_and_manifest_caveats(tmp_path: Path) -> None:

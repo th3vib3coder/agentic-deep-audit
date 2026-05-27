@@ -2,33 +2,110 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "API Surface",
   "type": "object",
-  "required": ["schema_version", "records"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "records"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "run_id": {"type": ["string", "null"]},
-    "repo": {"type": "object"},
-    "source_artifacts": {"type": "array", "items": {"type": "string"}},
+    "schema_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repo": {
+      "type": "object"
+    },
+    "source_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "records": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["surface_id", "kind", "source_path", "status", "confidence", "evidence_ids", "sanitizer_decision", "method", "path", "framework"],
+        "required": [
+          "surface_id",
+          "kind",
+          "source_path",
+          "status",
+          "confidence",
+          "evidence_ids",
+          "sanitizer_decision",
+          "method",
+          "path",
+          "framework"
+        ],
         "properties": {
-          "surface_id": {"type": "string"},
-          "kind": {"enum": ["rest_route", "graphql", "grpc"]},
-          "source_path": {"type": "string"},
-          "status": {"enum": ["observed", "heuristic", "skipped"]},
-          "confidence": {"enum": ["high", "medium", "low"]},
-          "evidence_ids": {"type": "array", "items": {"type": "string"}},
-          "sanitizer_decision": {"type": "string"},
-          "method": {"type": ["string", "null"]},
-          "path": {"type": "string"},
-          "framework": {"type": "string"}
+          "surface_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "rest_route",
+              "graphql",
+              "grpc"
+            ]
+          },
+          "source_path": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "observed",
+              "heuristic",
+              "skipped"
+            ]
+          },
+          "confidence": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ev-[0-9]{6,}$"
+            }
+          },
+          "sanitizer_decision": {
+            "type": "string"
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "framework": {
+            "type": "string"
+          }
         }
       }
     },
-    "skipped": {"type": "boolean"},
-    "skip_reason": {"type": ["string", "null"]},
-    "coverage": {"type": "object"}
+    "skipped": {
+      "type": "boolean"
+    },
+    "skip_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "coverage": {
+      "type": "object"
+    }
   }
 }

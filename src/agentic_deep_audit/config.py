@@ -177,7 +177,11 @@ def load_yaml_config_text(text: str) -> dict[str, Any]:
 
 
 def sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def canonicalize_target_context(value: Any) -> dict[str, Any]:

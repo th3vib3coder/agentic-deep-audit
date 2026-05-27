@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
+from .limits import FileSizeLimitError, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 from .sanitize import sanitize_markdown
 
@@ -65,8 +66,8 @@ def suspicious_behaviors(file_index: dict[str, Any], repo_path: Path, evidence_l
         if not evidence_id:
             continue
         try:
-            text = (repo_path / path_value).read_text(encoding="utf-8", errors="replace")
-        except OSError:
+            text = read_text_auto_capped(repo_path / path_value, encoding="utf-8", errors="replace", label="risk source")
+        except (OSError, FileSizeLimitError):
             continue
         for kind, patterns in behavior_patterns().items():
             for pattern, severity, confidence, recommendation in patterns:
@@ -120,7 +121,11 @@ def agentic_security(file_index: dict[str, Any], repo_path: Path, evidence_looku
         if not evidence_id:
             skipped.append({"path": path_value, "reason": "missing evidence id"})
             continue
-        text = (repo_path / path_value).read_text(encoding="utf-8", errors="replace")
+        try:
+            text = read_text_auto_capped(repo_path / path_value, encoding="utf-8", errors="replace", label="agentic security source")
+        except (OSError, FileSizeLimitError) as exc:
+            skipped.append({"path": path_value, "reason": str(exc)})
+            continue
         sanitized = sanitize_markdown(path_value, text, evidence_id=evidence_id) if Path(path_value).suffix.lower() in {".md", ".txt"} else None
         scanned.append({"path": path_value, "sanitizer_decision": sanitized.decision if sanitized else "not_markdown"})
         checks = [
