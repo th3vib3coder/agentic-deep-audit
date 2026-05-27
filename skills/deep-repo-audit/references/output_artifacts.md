@@ -10,6 +10,7 @@ Each artifact below is required, optional-with-skipped-rationale, bundled policy
 - `.network_policy.json`
 - `.network_policy.json.snapshot`
 - `policies/BLOCKED_COMMANDS_ALLOWLIST.json`
+- `policies/DEFAULT_NETWORK_POLICY.json`
 - `TOOL_STATUS.json`
 - `PROGRESS.md`
 - `BLOCKED_COMMANDS_ATTEMPTS.json`
@@ -110,6 +111,7 @@ Each artifact below is required, optional-with-skipped-rationale, bundled policy
 - `REPORT.md`
 - `OPEN_QUESTIONS.md`
 - `VALIDATION_REPORT.md`
+- `VALIDATION_REPORT.json`
 - `ADVERSARIAL_REVIEW_PACKET.md`
 - `REVIEW_LEDGER.md`
 - `RELEASE_CHECKLIST.md`

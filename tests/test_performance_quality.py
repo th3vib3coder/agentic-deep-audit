@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from agentic_deep_audit.audit_quality import quality_markdown, test_coverage_signal as build_coverage_signal
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 
@@ -73,6 +74,30 @@ def test_test_coverage_signal_never_invents_percentage_without_artifact(tmp_path
     assert "Coverage artifact files observed: 0" in text
     assert "Skipped: no coverage artifact" in text
     assert "%" not in text
+
+
+def test_quality_score_does_not_award_free_point_without_risk_review() -> None:
+    text = quality_markdown(
+        {"records": [{"path": "README.md", "kind": "docs"}]},
+        {},
+        {"records": []},
+        {},
+        {"test_files": [], "ci_commands": 0, "numeric_coverage": [], "coverage_files": []},
+    )
+
+    assert "Evidence-weighted quality signal: 1/5." in text
+
+
+def test_coverage_signal_ignores_out_of_range_coverage_percent(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "coverage.xml").write_text('<coverage line-rate="9999"></coverage>', encoding="utf-8")
+    file_index = {"records": [{"path": "coverage.xml", "path_normalized": "coverage.xml", "kind": "docs"}]}
+
+    coverage = build_coverage_signal(file_index, "| command | `pytest` |\n", {"records": []}, repo, {})
+
+    assert coverage["numeric_coverage"] == []
+    assert coverage["ci_test_command_count"] == 1
 
 
 def test_runtime_metrics_are_plugin_scoped_and_memory_skip_not_zero(tmp_path: Path) -> None:

@@ -11,7 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import ARTIFACT_PATHS, RUN_CONFIG
+import yaml
+from jsonschema import Draft202012Validator
+
+from .models import ARTIFACT_PATHS, RUN_CONFIG, load_schema_registry
 
 
 DEFAULT_GRAPH_CENTRALITY = {
@@ -66,6 +69,8 @@ class ArgvOverrides:
     argv: list[str]
     profile: str | None = None
     output_dir: str | None = None
+    allowed_roots: tuple[str, ...] = ()
+    allow_system_roots: bool = False
     dry_run: bool = False
     renderer: str | None = None
     graphify: bool = False
@@ -74,86 +79,98 @@ class ArgvOverrides:
     graph_source: str | None = None
 
 
-def _strip_inline_comment(value: str) -> str:
-    in_quote: str | None = None
-    for index, char in enumerate(value):
-        if char in {"'", '"'}:
-            in_quote = None if in_quote == char else char
-        if char == "#" and in_quote is None:
-            return value[:index].rstrip()
-    return value
-
-
-def parse_scalar(value: str) -> Any:
-    value = _strip_inline_comment(value.strip())
-    if value == "":
-        return ""
-    if value in {"null", "Null", "NULL", "~"}:
-        return None
-    if value in {"true", "True", "TRUE"}:
-        return True
-    if value in {"false", "False", "FALSE"}:
-        return False
-    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-        return value[1:-1]
-    if value.startswith("[") and value.endswith("]"):
-        inner = value[1:-1].strip()
-        if not inner:
-            return []
-        return [parse_scalar(part.strip()) for part in inner.split(",")]
-    if value.startswith("{") and value.endswith("}"):
-        inner = value[1:-1].strip()
-        if not inner:
-            return {}
-        result: dict[str, Any] = {}
-        for part in inner.split(","):
-            key, item_value = part.split(":", 1)
-            result[str(parse_scalar(key.strip()))] = parse_scalar(item_value.strip())
-        return result
-    if re.fullmatch(r"-?\d+", value):
-        return int(value)
-    if re.fullmatch(r"-?\d+\.\d+", value):
-        return float(value)
-    return value
-
-
-def parse_simple_yaml(text: str) -> dict[str, Any]:
-    """Parse the constrained YAML shape used by audit configuration fixtures."""
-
-    root: dict[str, Any] = {}
-    stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
-    for raw_line in text.splitlines():
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-            continue
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        line = raw_line.strip()
-        if ":" not in line:
-            raise ConfigError(f"unsupported YAML line: {raw_line}")
-        key, raw_value = line.split(":", 1)
-        key = key.strip()
-        raw_value = raw_value.strip()
-        while stack and indent <= stack[-1][0]:
-            stack.pop()
-        if not stack:
-            raise ConfigError(f"invalid indentation near: {raw_line}")
-        parent = stack[-1][1]
-        if raw_value == "":
-            child: dict[str, Any] = {}
-            parent[key] = child
-            stack.append((indent, child))
-        else:
-            parent[key] = parse_scalar(raw_value)
-    return root
-
-
 def load_config_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise ConfigError(f"config file not found: {path}")
-    text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".json":
-        data = json.loads(text)
-    else:
-        data = parse_simple_yaml(text)
+    text = path.read_text(encoding="utf-8-sig")
+    try:
+        if path.suffix.lower() == ".json":
+            data = json.loads(text)
+        else:
+            data = load_yaml_config_text(text)
+    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise ConfigError(f"config parse failed: {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError("config root must be an object")
+    return data
+
+
+def _is_windows_path_literal(value: str) -> bool:
+    return bool(re.match(r"^[A-Za-z]:\\", value) or value.startswith("\\\\"))
+
+
+def _escape_windows_paths_in_line(line: str) -> str:
+    output: list[str] = []
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if char != '"':
+            output.append(char)
+            index += 1
+            continue
+        end = index + 1
+        escaped = False
+        value_chars: list[str] = []
+        while end < len(line):
+            current = line[end]
+            if current == '"' and not escaped:
+                break
+            value_chars.append(current)
+            escaped = current == "\\" and not escaped
+            if current != "\\":
+                escaped = False
+            end += 1
+        if end >= len(line):
+            output.append(line[index:])
+            break
+        value = "".join(value_chars)
+        if _is_windows_path_literal(value):
+            value = escape_unescaped_backslashes(value)
+        output.extend(['"', value, '"'])
+        index = end + 1
+    return "".join(output)
+
+
+def _escape_windows_backslashes_in_double_quoted_scalars(text: str) -> str:
+    lines: list[str] = []
+    block_indent: int | None = None
+    for line in text.splitlines():
+        indent = len(line) - len(line.lstrip(" "))
+        if block_indent is not None:
+            if line.strip() and indent <= block_indent:
+                block_indent = None
+            else:
+                lines.append(line)
+                continue
+        if re.search(r":\s*[|>][+-]?\s*(?:#.*)?$", line):
+            block_indent = indent
+            lines.append(line)
+            continue
+        lines.append(_escape_windows_paths_in_line(line))
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
+def escape_unescaped_backslashes(value: str) -> str:
+    output: list[str] = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char != "\\":
+            output.append(char)
+            index += 1
+            continue
+        if index + 1 < len(value) and value[index + 1] == "\\":
+            output.append("\\\\")
+            index += 2
+            continue
+        output.append("\\\\")
+        index += 1
+    return "".join(output)
+
+
+def load_yaml_config_text(text: str) -> dict[str, Any]:
+    prepared = _escape_windows_backslashes_in_double_quoted_scalars(text)
+    data = yaml.safe_load(prepared) or {}
     if not isinstance(data, dict):
         raise ConfigError("config root must be an object")
     return data
@@ -238,13 +255,156 @@ def canonicalize_retrieval(value: Any) -> dict[str, Any]:
     return retrieval
 
 
+def validate_audit_config_document(config: dict[str, Any]) -> None:
+    schema = load_schema_registry()["audit_config"].schema
+    validator = Draft202012Validator(schema)
+    errors = sorted(validator.iter_errors(config), key=lambda item: list(item.path))
+    if errors:
+        first = errors[0]
+        location = ".".join(str(part) for part in first.path) or "<root>"
+        raise ConfigError(f"config schema invalid at {location}: {first.message}")
+
+
+def _stringify_path(path: Path) -> str:
+    return path.as_posix()
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _home_path() -> Path | None:
+    try:
+        return Path.home().resolve()
+    except RuntimeError:
+        return None
+
+
+def _sensitive_roots() -> list[tuple[Path, str]]:
+    roots: list[tuple[Path, str]] = []
+    for raw, label in [("/etc", "/etc"), ("/proc", "/proc"), ("/sys", "/sys")]:
+        path = Path(raw)
+        if path.exists():
+            roots.append((path.resolve(), label))
+    for raw, label in [("C:/Windows", "C:\\Windows"), ("C:/Program Files", "C:\\Program Files"), ("C:/Program Files (x86)", "C:\\Program Files (x86)")]:
+        path = Path(raw)
+        if path.exists():
+            roots.append((path.resolve(), label))
+    home = _home_path()
+    if home is not None:
+        for child in [".ssh", ".aws", ".config"]:
+            roots.append(((home / child).resolve(), f"~/{child}"))
+    return roots
+
+
+def _reject_sensitive_path(path: Path, field_name: str, allow_system_roots: bool) -> None:
+    if allow_system_roots:
+        return
+    resolved = path.resolve()
+    home = _home_path()
+    if home is not None and resolved == home:
+        raise ConfigError(f"{field_name} points at user home; pass --allow-system-roots to opt in: {_stringify_path(resolved)}")
+    for root, label in _sensitive_roots():
+        if _path_is_relative_to(resolved, root):
+            raise ConfigError(f"{field_name} points at sensitive system path {label}; pass --allow-system-roots to opt in: {_stringify_path(resolved)}")
+
+
+def _default_allowed_roots(config_path: Path | None) -> list[Path]:
+    cwd = Path.cwd().resolve()
+    home = _home_path()
+    roots = [] if home is not None and cwd == home else [cwd]
+    if config_path is not None:
+        roots.append(config_path.parent.resolve())
+    return list(dict.fromkeys(roots))
+
+
+def _resolve_allowed_roots(raw_roots: tuple[str, ...] | list[str] | None, config_path: Path | None) -> list[Path]:
+    roots = _default_allowed_roots(config_path)
+    base = config_path.parent if config_path is not None else Path.cwd()
+    for raw in raw_roots or ():
+        if not isinstance(raw, str) or not raw.strip():
+            raise ConfigError("allowed root must be a non-empty string")
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        resolved = candidate.resolve()
+        if not resolved.exists() or not resolved.is_dir():
+            raise ConfigError(f"allowed root does not exist or is not a directory: {resolved}")
+        roots.append(resolved)
+    return list(dict.fromkeys(roots))
+
+
+def _assert_under_allowed_roots(path: Path, allowed_roots: list[Path], field_name: str, allow_system_roots: bool = False) -> None:
+    resolved = path.resolve()
+    _reject_sensitive_path(resolved, field_name, allow_system_roots)
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(root.resolve())
+            return
+        except ValueError:
+            continue
+    roots = ", ".join(_stringify_path(root.resolve()) for root in allowed_roots)
+    raise ConfigError(f"{field_name} outside allowed root: {_stringify_path(resolved)} (allowed: {roots})")
+
+
+def resolve_repo_path(repo_path: Any, config_path: Path | None, allowed_roots: list[Path] | None = None, allow_system_roots: bool = False) -> Path:
+    if not isinstance(repo_path, str) or not repo_path.strip():
+        raise ConfigError("repo.path must be a non-empty string for local repositories")
+    path = Path(repo_path).expanduser()
+    if not path.is_absolute():
+        base = config_path.parent if config_path is not None else Path.cwd()
+        path = base / path
+    resolved = path.resolve()
+    if not resolved.exists():
+        raise ConfigError(f"repo.path does not exist: {resolved}")
+    if not resolved.is_dir():
+        raise ConfigError(f"repo.path must be a directory: {resolved}")
+    _assert_under_allowed_roots(resolved, allowed_roots or _default_allowed_roots(config_path), "repo.path", allow_system_roots)
+    return resolved
+
+
+def normalize_output_dir(value: Any, config_path: Path | None = None, allowed_roots: list[Path] | None = None, allow_system_roots: bool = False) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError("output_dir must be a non-empty string")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        base = config_path.parent if config_path is not None else Path.cwd()
+        path = base / path
+    resolved = path.resolve()
+    _assert_under_allowed_roots(resolved, allowed_roots or _default_allowed_roots(config_path), "output_dir", allow_system_roots)
+    return _stringify_path(resolved)
+
+
+def normalize_repo_config(repo: Any, config_path: Path | None, allowed_roots: list[Path] | None = None, allow_system_roots: bool = False) -> tuple[dict[str, Any], bool]:
+    if not isinstance(repo, dict):
+        raise ConfigError("config requires repo object")
+    normalized = copy.deepcopy(repo)
+    repo_kind = normalized.get("kind")
+    if repo_kind == "local":
+        resolved_repo = resolve_repo_path(normalized.get("path"), config_path, allowed_roots, allow_system_roots)
+        normalized["path"] = _stringify_path(resolved_repo)
+        return normalized, True
+    if repo_kind == "github":
+        if not normalized.get("github"):
+            raise ConfigError("repo.github is required when repo.kind is github")
+        return normalized, False
+    raise ConfigError("repo.kind must be local or github")
+
+
 def normalize_run_config(config: dict[str, Any], overrides: ArgvOverrides, config_path: Path | None) -> dict[str, Any]:
+    validate_audit_config_document(config)
     if "repo" not in config or not isinstance(config["repo"], dict):
         raise ConfigError("config requires repo object")
+    allowed_roots = _resolve_allowed_roots(overrides.allowed_roots, config_path)
+    repo_config, repo_path_environment_specific = normalize_repo_config(config["repo"], config_path, allowed_roots, overrides.allow_system_roots)
     normalized = {
         "schema_version": str(config.get("schema_version", "1.0")),
-        "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
-        "repo": copy.deepcopy(config["repo"]),
+        "run_id": f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        "repo": repo_config,
         "profile": config.get("profile", "standard"),
         "mode": config.get("mode", "source-audit"),
         "output_dir": config.get("output_dir", "audit"),
@@ -291,19 +451,27 @@ def normalize_run_config(config: dict[str, Any], overrides: ArgvOverrides, confi
         normalized["override_source"]["graph_source"] = "argv"
     if normalized["retrieval"]["rrf"]["override"]:
         normalized["override_source"]["retrieval.rrf"] = "config"
-    repo_path = normalized["repo"].get("path")
-    if repo_path:
-        normalized["repo"]["path"] = str(Path(repo_path).resolve())
+    if repo_path_environment_specific:
         normalized["provenance"]["environment_specific_paths"].append("repo.path")
-    normalized["output_dir"] = str(Path(str(normalized["output_dir"])))
+    normalized["output_dir"] = normalize_output_dir(normalized["output_dir"], config_path, allowed_roots, overrides.allow_system_roots)
     return normalized
 
 
 def load_run_config(path: Path, overrides: ArgvOverrides) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"run config parse failed: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError("run config root must be an object")
     data = copy.deepcopy(data)
+    validate_audit_config_document(data)
+    if "repo" not in data or not isinstance(data["repo"], dict):
+        raise ConfigError("run config requires repo object")
+    allowed_roots = _resolve_allowed_roots(overrides.allowed_roots, path)
+    data["repo"], _ = normalize_repo_config(data["repo"], path, allowed_roots, overrides.allow_system_roots)
+    if "output_dir" not in data:
+        raise ConfigError("run config requires output_dir")
     data["target_context"] = canonicalize_target_context(data.get("target_context"))
     data["retrieval"] = canonicalize_retrieval(data.get("retrieval"))
     data["argv"] = overrides.argv
@@ -333,6 +501,7 @@ def load_run_config(path: Path, overrides: ArgvOverrides) -> dict[str, Any]:
     if data["retrieval"]["rrf"]["override"]:
         override_source = data.setdefault("override_source", {})
         override_source["retrieval.rrf"] = override_source.get("retrieval.rrf", "config")
+    data["output_dir"] = normalize_output_dir(data["output_dir"], path, allowed_roots, overrides.allow_system_roots)
     return data
 
 

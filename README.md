@@ -1,6 +1,6 @@
 # Agentic Deep Audit
 
-Agentic Deep Audit is a Codex v1 plugin for evidence-first audits of local and GitHub open-source repositories. It produces portable `audit/` artifacts for human review, external adversarial review, Obsidian-style wiki navigation, graph exports, corpus retrieval and optional read-only MCP handoff.
+Agentic Deep Audit is an evidence-first audit engine with CLI, Codex, MCP and package adapters for local and GitHub open-source repositories. It produces portable `audit/` artifacts for human review, external adversarial review, Obsidian-style wiki navigation, graph exports, corpus retrieval and optional read-only MCP handoff.
 
 The default mode treats the target repository as untrusted input. It reads files, records evidence and does not execute target repository code, install scripts, tests, hooks, MCP configs or manifest commands.
 
@@ -20,6 +20,10 @@ deep-audit validate --audit-dir audit
 ```
 
 Use `--run-config audit/RUN_CONFIG.json` for a reproducible rerun from normalized config.
+
+## Host Hook Runtime
+
+Claude Code hook integration requires `AGENTIC_DEEP_AUDIT_PYTHON` to point at a Python >= 3.10 interpreter that can import `agentic_deep_audit`. If the variable is missing, the bundled hook exits fail-closed with `hook_misconfigured` instead of allowing the tool call.
 
 ## Profiles
 

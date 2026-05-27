@@ -71,6 +71,34 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def test_builtin_html_renderer_escapes_node_labels(tmp_path: Path) -> None:
+    graph = {
+        "nodes": [{"id": "n1<script>", "type": "module", "label": "<script>alert(1)</script>"}],
+        "edges": [{"source": "n1<script>", "target": "n1<script>", "type": "<img src=x onerror=alert(1)>"}],
+    }
+
+    path = graph_renderers.write_builtin_html(tmp_path, graph)
+    text = path.read_text(encoding="utf-8")
+
+    assert "<script>alert(1)</script>" not in text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text
+    assert "Content-Security-Policy" in text
+
+
+def test_mermaid_renderer_escapes_quotes_brackets_bidi_and_fence_breaks() -> None:
+    graph = {"nodes": [{"id": "n1", "label": 'evil"]\n```html\n<script>x</script>\u202e'}], "edges": []}
+
+    lines = graph_renderers.mermaid_lines(graph)
+    text = "\n".join(lines)
+
+    assert 'evil"]' not in text
+    assert "&#93;" in text
+    assert "\u202e" not in text
+    assert "```html" not in text
+    assert "<script>" not in text
+    assert "&lt;script&gt;x&lt;/script&gt;" in text
+
+
 def test_run_exports_full_canonical_graph_after_wiki_and_reuse(tmp_path: Path) -> None:
     audit_dir = run_fixture(tmp_path, "performance_quality_project")
     graph = load_json(audit_dir / ARTIFACT_PATHS["GRAPH"])
@@ -243,6 +271,27 @@ def test_graph_validator_rejects_derived_drift_missing_evidence_and_wrong_skips(
     assert any("GRAPHIFY_SKIPPED.md must be emitted at audit root" in error for error in wrong_graphify_result.errors)
 
 
+def test_graph_validator_rejects_missing_derived_nodes_export(tmp_path: Path) -> None:
+    audit_dir = run_fixture(tmp_path, "performance_quality_project")
+    (audit_dir / ARTIFACT_PATHS["GRAPH_NODES"]).unlink()
+
+    result = validate_audit(audit_dir)
+
+    assert not result.ok
+    assert any("graph/nodes.json" in error for error in result.errors)
+
+
+def test_graph_validator_rejects_non_object_json_roots(tmp_path: Path) -> None:
+    audit_dir = run_fixture(tmp_path, "performance_quality_project")
+    graph_path = audit_dir / ARTIFACT_PATHS["GRAPH"]
+    graph_path.write_text("[]\n", encoding="utf-8")
+
+    result = validate_audit(audit_dir)
+
+    assert not result.ok
+    assert any("root must be object" in error for error in result.errors)
+
+
 def test_promoted_graphify_writes_isolated_outputs_diff_and_preserves_canonical(tmp_path: Path, monkeypatch) -> None:
     audit_dir = run_fixture(tmp_path, "python_basic", command="graph")
     graph_path = audit_dir / ARTIFACT_PATHS["GRAPH"]
@@ -274,7 +323,7 @@ def test_promoted_graphify_writes_isolated_outputs_diff_and_preserves_canonical(
         altered = json.loads(original)
         altered["nodes"].append({"id": "graphify:extra", "type": "artifact", "label": "Graphify extra", "evidence_ids": []})
         write_json(output, altered)
-        return subprocess.CompletedProcess(command, 0, stdout="graphify ok", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="\x1b[31mgraphify ok\x1b[0m\n```html\n<script>x()</script>\n```", stderr="bad\n```\u202e")
 
     monkeypatch.setattr(graph_renderers, "PLUGIN_ROOT", plugin_root)
     monkeypatch.setattr(graph_renderers.shutil, "which", lambda name: "graphify" if name == "graphify" else None)
@@ -288,6 +337,12 @@ def test_promoted_graphify_writes_isolated_outputs_diff_and_preserves_canonical(
     diff = (audit_dir / ARTIFACT_PATHS["GRAPHIFY_DIFF"]).read_text(encoding="utf-8")
     assert "canonical_sha256" in diff
     assert "graphify_sha256" in diff
+    report = (audit_dir / ARTIFACT_PATHS["GRAPHIFY_REPORT"]).read_text(encoding="utf-8")
+    assert "\x1b" not in report
+    assert "\u202e" not in report
+    assert "`\u200b``html" in report
+    assert "bad\n`\u200b``" in report
+    assert "```html\n<script>x()</script>" not in report
     assert not (audit_dir / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]).exists()
     assert validate_audit(audit_dir).ok
 
@@ -338,6 +393,44 @@ def test_promoted_graphify_mutating_canonical_is_restored_and_skipped(tmp_path: 
     assert graph_path.read_text(encoding="utf-8") == original
     assert not (audit_dir / ARTIFACT_PATHS["GRAPHIFY_GRAPH"]).exists()
     assert "attempted to mutate canonical graph" in (audit_dir / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]).read_text(encoding="utf-8")
+    assert validate_audit(audit_dir).ok
+
+
+def test_failed_graphify_stderr_cannot_break_skipped_markdown(tmp_path: Path, monkeypatch) -> None:
+    audit_dir = run_fixture(tmp_path, "python_basic", command="graph")
+    graph = load_json(audit_dir / ARTIFACT_PATHS["GRAPH"])
+    plugin_root = tmp_path / "plugin-root-failed-stderr"
+    decision_path = plugin_root / "docs" / "adapters" / "graphify" / "adapter_decision.json"
+    decision_path.parent.mkdir(parents=True)
+    write_json(
+        decision_path,
+        {
+            "adapter_id": "graphify",
+            "installability": {"os": ["Windows"], "notes": "fake graphify failure"},
+            "license": {"spdx": "MIT", "compatible_with_target_context": True},
+            "version_pinning": {"strategy": "system", "min_version": None},
+            "command_readonly": "graphify --version",
+            "policy_applied": ["no-exec", "read-only", "path-containment"],
+            "schema_output_observed": {"sample_path": "samples/graph.json", "hash": "fake"},
+            "fallback": "canonical graph",
+            "decision": "promote",
+            "reviewer": "test",
+            "decision_date": "2026-05-23",
+        },
+    )
+
+    def failing_run(command, cwd, text, capture_output, check, timeout):
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="bad\n```html\n<script>x()</script>\n```")
+
+    monkeypatch.setattr(graph_renderers, "PLUGIN_ROOT", plugin_root)
+    monkeypatch.setattr(graph_renderers.shutil, "which", lambda name: "graphify" if name == "graphify" else None)
+    monkeypatch.setattr(graph_renderers.subprocess, "run", failing_run)
+
+    write_graphify_outputs(audit_dir, graph)
+
+    skipped = (audit_dir / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]).read_text(encoding="utf-8")
+    assert "bad `\u200b``html <script>x()</script> `\u200b``" in skipped
+    assert "```html\n<script>x()</script>" not in skipped
     assert validate_audit(audit_dir).ok
 
 

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Module Graph",
+  "type": "object",
+  "required": ["schema_version", "nodes", "edges", "coverage"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "nodes": {"type": "array", "items": {"type": "object", "required": ["id", "type", "path"], "properties": {"id": {"type": "string"}, "type": {"enum": ["module", "package", "file", "directory"]}, "path": {"type": "string"}, "evidence_ids": {"type": "array", "items": {"type": "string"}}}}},
+    "edges": {"type": "array", "items": {"type": "object", "required": ["source", "target", "type", "weight", "conditional", "dynamic", "evidence_ids"], "properties": {"source": {"type": "string"}, "target": {"type": "string"}, "type": {"enum": ["imports", "depends_on", "contains", "calls", "references"]}, "weight": {"type": ["number", "integer"]}, "conditional": {"type": "boolean"}, "dynamic": {"type": "boolean"}, "evidence_ids": {"type": "array", "items": {"type": "string"}}}}},
+    "coverage": {"type": "object"},
+    "partial_reason": {"type": ["string", "null"]}
+  }
+}

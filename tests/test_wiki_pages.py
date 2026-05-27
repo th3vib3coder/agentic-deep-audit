@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from agentic_deep_audit.audit_validate import validate_audit
-from agentic_deep_audit.audit_wiki import run_wiki, stable_slug
+from agentic_deep_audit.audit_wiki import decision_paths, run_wiki, stable_slug, write_page
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 from agentic_deep_audit.validate_wiki import REQUIRED_FRONTMATTER, parse_frontmatter
 
@@ -81,6 +81,30 @@ def test_wiki_templates_match_required_frontmatter_contract() -> None:
 
         assert not errors
         assert REQUIRED_FRONTMATTER <= set(frontmatter)
+
+
+def test_wiki_page_escapes_untrusted_markdown_fragments(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    write_json(audit_dir / ARTIFACT_PATHS["PROVENANCE"], {"schema_version": "1.0", "git": {"commit": "abc"}})
+    write_page(
+        audit_dir,
+        "wiki/modules/evil.md",
+        "Module <script>alert(1)</script>",
+        "module",
+        ["module"],
+        [],
+        [],
+        "Purpose <img src=x onerror=alert(1)>",
+        ["- Path: `<script>alert(1)</script>|spoof`."],
+    )
+
+    text = (audit_dir / "wiki" / "modules" / "evil.md").read_text(encoding="utf-8")
+
+    assert "<script>" not in text
+    assert "<img" not in text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text
+    assert "\\|spoof" in text
 
 
 def test_run_orders_wiki_before_corpus(tmp_path: Path) -> None:
@@ -283,3 +307,27 @@ def test_decisions_page_emits_skipped_open_question_when_no_decision_docs(tmp_pa
 
     assert skipped.exists()
     assert "skipped:" in skipped.read_text(encoding="utf-8")
+
+
+def test_decision_paths_reject_repo_relative_traversal(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "CHANGELOG.md").write_text("# Changelog\n\n- Architecture decision: escape.\n", encoding="utf-8")
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    write_json(
+        audit_dir / ARTIFACT_PATHS["FILE_INDEX"],
+        {
+            "schema_version": "1.0",
+            "repo": {"path": str(repo)},
+            "records": [{"path": "../outside/CHANGELOG.md", "path_normalized": "../outside/CHANGELOG.md"}],
+        },
+    )
+    write_json(
+        audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"],
+        {"schema_version": "1.0", "evidence": [{"id": "ev-000001", "path": "../outside/CHANGELOG.md"}]},
+    )
+
+    assert decision_paths(audit_dir) == []

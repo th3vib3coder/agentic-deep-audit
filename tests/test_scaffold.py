@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-GENERATED_NAMES = {".git", ".pytest_cache", "__pycache__"}
+GENERATED_NAMES = {".git", ".pytest_cache", "__pycache__", "build", "dist", ".coverage"}
 
 
 def test_plugin_manifest_contract() -> None:
@@ -25,12 +26,14 @@ def test_python_package_scaffold() -> None:
 
 
 def test_pyproject_metadata_contract() -> None:
-    pyproject = (PLUGIN_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject_text = (PLUGIN_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject = tomllib.loads(pyproject_text)
 
-    assert 'name = "agentic-deep-audit"' in pyproject
-    assert 'requires-python = ">=3.10"' in pyproject
-    assert "jsonschema>=4.0" in pyproject
-    assert 'deep-audit = "agentic_deep_audit.cli:main"' in pyproject
+    assert pyproject["project"]["name"] == "agentic-deep-audit"
+    assert pyproject["project"]["requires-python"] == ">=3.10"
+    assert "jsonschema>=4.0" in pyproject["project"]["dependencies"]
+    assert "PyYAML>=6.0" in pyproject["project"]["dependencies"]
+    assert pyproject["project"]["scripts"]["deep-audit"] == "agentic_deep_audit.cli:main"
 
 
 def test_scaffold_directories_are_documented() -> None:
@@ -47,11 +50,16 @@ def test_scaffold_directories_are_documented() -> None:
 
 def test_no_orphan_top_level_scaffold_paths() -> None:
     allowed = {
+        ".claude-plugin",
         ".codex-plugin",
         ".github",
         ".gitignore",
         "README.md",
         "RELEASE_CHECKLIST.md",
+        "REVIEWER_PROTOCOL.md",
+        "REVIEW_LEDGER.md",
+        "REVIEW_LEDGER_ARCHIVE_001.md",
+        "REVIEW_LEDGER_ARCHIVE_002.md",
         "assets",
         "docs",
         "hooks",

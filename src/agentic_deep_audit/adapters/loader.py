@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from .base import AdapterError, ToolAdapter
 
 
+CORE_CLASS = "core"
+KNOWN_PROVENANCE_CLASSES = {CORE_CLASS, "source-claim", "industry-known"}
 PREPROMOTION_CLASSES = {"source-claim", "industry-known"}
 DEFERRED_BY_DEFAULT = {"graphify", "madge", "pydeps", "osv", "osv-scanner"}
+CORE_ADAPTER_IDS = {"python_probe", "cwd_probe"}
+MIN_DECISION_DATE = date(2026, 1, 1)
 
 
 class AdapterBlockedPrePromotion(AdapterError):
@@ -52,8 +57,20 @@ def load_adapter_decision(plugin_root: Path, adapter_id: str) -> AdapterDecision
     return AdapterDecision(adapter_id=adapter_id, decision=decision, path=path, payload=payload)
 
 
+def normalize_provenance_class(provenance_class: Any) -> str:
+    if not isinstance(provenance_class, str):
+        raise AdapterBlockedPrePromotion("adapter_blocked_pre_promotion: provenance_class must be a string")
+    normalized = provenance_class.strip().lower()
+    if normalized not in KNOWN_PROVENANCE_CLASSES:
+        raise AdapterBlockedPrePromotion(f"adapter_blocked_pre_promotion: unknown provenance_class {provenance_class!r}")
+    return normalized
+
+
 def validate_adapter_promotion(plugin_root: Path, adapter_id: str, provenance_class: str) -> AdapterDecision | None:
-    if provenance_class in PREPROMOTION_CLASSES or adapter_id in DEFERRED_BY_DEFAULT:
+    normalized_class = normalize_provenance_class(provenance_class)
+    if normalized_class == CORE_CLASS and adapter_id not in CORE_ADAPTER_IDS:
+        return load_adapter_decision(plugin_root, adapter_id)
+    if normalized_class in PREPROMOTION_CLASSES or adapter_id in DEFERRED_BY_DEFAULT:
         return load_adapter_decision(plugin_root, adapter_id)
     return None
 
@@ -104,3 +121,9 @@ def validate_adapter_decision_payload(payload: dict[str, Any]) -> None:
         raise ValueError("reviewer must be non-empty string")
     if not isinstance(payload.get("decision_date"), str) or not payload["decision_date"]:
         raise ValueError("decision_date must be non-empty string")
+    try:
+        decision_date = date.fromisoformat(payload["decision_date"])
+    except ValueError as exc:
+        raise ValueError("decision_date must be ISO date YYYY-MM-DD") from exc
+    if decision_date < MIN_DECISION_DATE:
+        raise ValueError(f"decision_date must be on or after {MIN_DECISION_DATE.isoformat()}")

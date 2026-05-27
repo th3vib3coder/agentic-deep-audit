@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "name": "agentic-deep-audit",
   "version": "0.1.0",
-  "description": "Codex plugin for evidence-first deep audits of local and GitHub open-source repositories.",
+  "description": "Evidence-first audit engine with Codex, CLI, MCP and package adapters for local and GitHub open-source repositories.",
   "skills": [
     {
       "name": "deep-repo-audit",
@@ -11,5 +11,9 @@
   ],
   "permissions": {
     "network": "none"
+  },
+  "hooks": {
+    "claude_code": "hooks/hooks.json",
+    "codex": "hooks/hooks.json"
   }
 }

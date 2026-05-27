@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from agentic_deep_audit.bootstrap import bootstrap_audit, detect_command
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 
 
-REPO_ROOT = PLUGIN_ROOT
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeAdapter(ToolAdapter):
@@ -99,6 +100,98 @@ def test_tool_status_core_records_include_capability_fields(tmp_path: Path) -> N
     assert missing["capability"] == "definitely_missing_agentic_audit_tool_version_probe"
 
 
+def test_detect_command_rejects_current_tree_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = tmp_path / "git.cmd"
+    fake.write_text("@echo malicious\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("agentic_deep_audit.bootstrap.shutil.which", lambda _tool: str(fake))
+
+    status = detect_command("git", ["--version"])
+
+    assert status["status"] == "skipped"
+    assert status["policy"] == "skipped"
+    assert "inside audit target root rejected" in status["skipped_reason"]
+
+
+def test_detect_command_rejects_target_root_path_without_chdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = tmp_path / "git.cmd"
+    fake.write_text("@echo malicious\n", encoding="utf-8")
+    monkeypatch.setattr("agentic_deep_audit.bootstrap.shutil.which", lambda _tool: str(fake))
+
+    status = detect_command("git", ["--version"], allowed_root=tmp_path)
+
+    assert status["status"] == "skipped"
+    assert status["policy"] == "skipped"
+    assert "inside audit target root rejected" in status["skipped_reason"]
+
+
+def test_detect_command_rejects_parent_repo_git_for_subdir_audit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    subdir = repo / "pkg"
+    subdir.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    fake = repo / "git.exe"
+    fake.write_text("@echo malicious\n", encoding="utf-8")
+    monkeypatch.setattr("agentic_deep_audit.bootstrap.shutil.which", lambda _tool: str(fake))
+
+    status = detect_command("git", ["--version"], allowed_root=subdir)
+
+    assert status["status"] == "skipped"
+    assert status["policy"] == "skipped"
+    assert "inside audit target root rejected" in status["skipped_reason"]
+    assert any(str(repo) in note for note in status["notes"])
+
+
+def test_detect_command_hardens_git_version_probe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    external = tmp_path.parent / f"{tmp_path.name}-bin"
+    external.mkdir()
+    fake = external / "git.exe"
+    fake.write_text("", encoding="utf-8")
+    monkeypatch.setattr("agentic_deep_audit.bootstrap.shutil.which", lambda _tool: str(fake))
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(command, 0, stdout="git version 2.99\n", stderr="")
+
+    monkeypatch.setattr("agentic_deep_audit.bootstrap.subprocess.run", fake_run)
+
+    status = detect_command("git", ["--version"], allowed_root=tmp_path)
+
+    assert status["status"] == "detected"
+    command = observed["command"]
+    assert isinstance(command, list)
+    assert "core.fsmonitor=false" in command
+    assert any(str(item).startswith("core.hooksPath=") for item in command)
+    assert "uploadpack.packObjectsHook=" in command
+    assert "protocol.ext.allow=never" in command
+    assert "protocol.file.allow=never" in command
+    assert "safe.directory=*" in command
+    env = observed["env"]
+    assert isinstance(env, dict)
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_detect_command_timeout_is_recorded_as_skip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    external = tmp_path.parent / f"{tmp_path.name}-bin"
+    external.mkdir()
+    fake = external / "rg.exe"
+    fake.write_text("", encoding="utf-8")
+    monkeypatch.setattr("agentic_deep_audit.bootstrap.shutil.which", lambda _tool: str(fake))
+
+    def timeout_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd="rg --version", timeout=10)
+
+    monkeypatch.setattr("agentic_deep_audit.bootstrap.subprocess.run", timeout_run)
+
+    status = detect_command("rg", ["--version"], allowed_root=tmp_path)
+
+    assert status["status"] == "skipped"
+    assert "timed out" in status["skipped_reason"]
+
+
 def test_adapter_promotion_blocks_deferred_and_missing_decisions(tmp_path: Path) -> None:
     with pytest.raises(AdapterBlockedPrePromotion, match="adapter_blocked_pre_promotion"):
         load_adapter(FakeAdapter(adapter_id="madge", provenance_class="industry-known"), tmp_path)
@@ -143,6 +236,27 @@ def test_adapter_promotion_rejects_mismatched_adapter_id(tmp_path: Path) -> None
         validate_adapter_promotion(tmp_path, "madge", "industry-known")
 
 
+def test_adapter_promotion_blocks_unknown_core_self_declaration(tmp_path: Path) -> None:
+    with pytest.raises(AdapterBlockedPrePromotion, match="missing decision JSON"):
+        validate_adapter_promotion(tmp_path, "graphify", "core")
+
+
+def test_adapter_promotion_rejects_unknown_or_malformed_provenance_class(tmp_path: Path) -> None:
+    for provenance_class in [" core", "Core", "unknown", "", None]:
+        with pytest.raises(AdapterBlockedPrePromotion, match="provenance_class|missing decision JSON"):
+            validate_adapter_promotion(tmp_path, "graphify", provenance_class)  # type: ignore[arg-type]
+
+
+def test_adapter_promotion_rejects_stale_decision_date(tmp_path: Path) -> None:
+    path = write_promote_decision(tmp_path, adapter_id="graphify", decision="promote")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["decision_date"] = "1970-01-01"
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(AdapterBlockedPrePromotion, match="decision_date"):
+        validate_adapter_promotion(tmp_path, "graphify", "industry-known")
+
+
 def test_secret_like_raw_output_is_not_persisted(tmp_path: Path) -> None:
     persisted, summary = persist_raw_output(tmp_path, "semgrep", "raw.json", "token ghp_ABCDEFGHIJKLMNOPQRST")
 
@@ -183,6 +297,29 @@ def test_adapter_run_persists_raw_output_inside_audit_dir(tmp_path: Path) -> Non
     assert status.output_path == "raw/python_probe/stdout.txt"
     assert (audit_dir / status.output_path).exists()
     assert status.exit_code is not None
+
+
+def test_adapter_run_scrubs_parent_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    adapter = FakeAdapter(adapter_id="python_probe", provenance_class="core")
+    observed: dict[str, object] = {}
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "99")
+    monkeypatch.setenv("SECRET_TOKEN", "raw-secret")
+
+    def fake_run(command, **kwargs):
+        observed["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("agentic_deep_audit.adapters.base.subprocess.run", fake_run)
+
+    run_adapter_command(adapter, ["python", "-m", "agentic_deep_audit.cli", "--help"], cwd=REPO_ROOT, audit_dir=audit_dir)
+
+    env = observed["env"]
+    assert isinstance(env, dict)
+    assert "SECRET_TOKEN" not in env
+    assert "GIT_CONFIG_COUNT" not in env
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
 
 
 def test_adapter_run_rejects_cwd_outside_repo_root(tmp_path: Path) -> None:

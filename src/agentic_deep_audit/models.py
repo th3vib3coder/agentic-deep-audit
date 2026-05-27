@@ -7,14 +7,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .resources import SOURCE_PLUGIN_ROOT, schema_dir
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_DIR = PLUGIN_ROOT / "skills" / "deep-repo-audit" / "schemas"
+
+PLUGIN_ROOT = SOURCE_PLUGIN_ROOT
+SCHEMA_DIR = schema_dir()
 
 RUN_CONFIG = "RUN_CONFIG.json"
 TOOL_STATUS = "TOOL_STATUS.json"
 PROGRESS = "PROGRESS.md"
 VALIDATION_REPORT = "VALIDATION_REPORT.md"
+VALIDATION_REPORT_JSON = "VALIDATION_REPORT.json"
 
 ARTIFACT_PATHS: dict[str, str] = {
     "AUDIT_CONFIG": "audit.config.yaml",
@@ -97,6 +100,7 @@ ARTIFACT_PATHS: dict[str, str] = {
     "REPORT": "REPORT.md",
     "OPEN_QUESTIONS": "OPEN_QUESTIONS.md",
     "VALIDATION_REPORT": VALIDATION_REPORT,
+    "VALIDATION_REPORT_JSON": VALIDATION_REPORT_JSON,
     "ADVERSARIAL_REVIEW_PACKET": "ADVERSARIAL_REVIEW_PACKET.md",
     "REVIEW_LEDGER": "REVIEW_LEDGER.md",
     "RELEASE_CHECKLIST": "RELEASE_CHECKLIST.md",
@@ -158,10 +162,11 @@ def _validate_schema_shape(name: str, value: Any) -> dict[str, Any]:
     return value
 
 
-def load_schema_registry(schema_dir: Path = SCHEMA_DIR) -> dict[str, SchemaRecord]:
+def load_schema_registry(schema_dir: Path | None = None) -> dict[str, SchemaRecord]:
+    schema_root = schema_dir or schema_dir_default()
     registry: dict[str, SchemaRecord] = {}
     for name, filename in SCHEMA_FILES.items():
-        path = schema_dir / filename
+        path = schema_root / filename
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001 - preserve path/schema name in error.
@@ -172,3 +177,7 @@ def load_schema_registry(schema_dir: Path = SCHEMA_DIR) -> dict[str, SchemaRecor
             raise SchemaRegistryError(f"{name}: invalid schema shape in {path}: {exc}") from exc
         registry[name] = SchemaRecord(name=name, filename=filename, path=path, schema=schema)
     return registry
+
+
+def schema_dir_default() -> Path:
+    return schema_dir()

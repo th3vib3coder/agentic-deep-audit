@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_deep_audit.audit_telemetry import CATEGORIES, default_parameters, is_bot_author, issue_pr_record, normalize_identity
+from agentic_deep_audit.audit_telemetry import CATEGORIES, default_parameters, is_bot_author, issue_pr_record, normalize_identity, pseudonymize_identity
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 
@@ -143,6 +143,7 @@ def test_bot_filter_and_identity_normalization_are_deterministic() -> None:
     assert is_bot_author("Build", "bot@example.com")
     assert normalize_identity("Alias", "ALIAS@EXAMPLE.COM", {"alias@example.com": "dev@example.com"}) == "dev@example.com"
     assert normalize_identity("No Email", "", {}) == "no email"
+    assert pseudonymize_identity("dev@example.com").startswith("id_")
 
 
 def test_git_telemetry_changelog_identity_and_manifest_caveats(tmp_path: Path) -> None:
@@ -160,7 +161,8 @@ def test_git_telemetry_changelog_identity_and_manifest_caveats(tmp_path: Path) -
     assert cadence["value"]["commit_count"] == 3
     assert cadence["parameters"]["time_window_start"] < cadence["parameters"]["time_window_end"]
     contributors = records["contributors_graph"]["value"]["contributors"]
-    assert contributors[0]["identity"] == "dev@example.com"
+    assert contributors[0]["identity"] == pseudonymize_identity("dev@example.com")
+    assert "dev@example.com" not in json.dumps(records["contributors_graph"])
     assert contributors[0]["commit_count"] == 2
     assert contributors[0]["code_touch_count"] == 2
     assert records["bus_factor_proxy"]["value"]["min_contributors_50pct"] == 1
@@ -195,6 +197,26 @@ def test_issue_pr_signals_observed_when_policy_and_target_allow(tmp_path: Path) 
     assert record["status"] == "observed"
     assert record["source"] == "github_api"
     assert record["value"]["target"] == "owner/repo"
+
+
+def test_issue_pr_signals_rejects_traversal_target(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    (audit_dir / ARTIFACT_PATHS["NETWORK_POLICY_SNAPSHOT"]).write_text(
+        json.dumps({"schema_version": "1.0", "default": "deny", "allowed_domains": ["api.github.com"], "denied_domains": [], "send_source_code": False}),
+        encoding="utf-8",
+    )
+
+    record = issue_pr_record(
+        1,
+        audit_dir,
+        default_parameters(as_of="2026-05-23T00:00:00+00:00"),
+        {"github": {"target": "../../evil.com/path"}},
+        fetcher=lambda target: {"target": target},
+    )
+
+    assert record["status"] == "skipped"
+    assert record["limitations"] == ["GitHub target invalid"]
 
 
 def test_project_telemetry_report_sections_must_match_json(tmp_path: Path) -> None:

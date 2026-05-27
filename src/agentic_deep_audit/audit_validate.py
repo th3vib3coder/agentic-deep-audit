@@ -28,6 +28,19 @@ from .validate_extensions import extension_artifacts_present, validate_extension
 
 
 BYTE_RANGE_REQUIRED_KINDS = {"file_line", "file_range", "symbol_span", "file_range_binary_safe"}
+COMPLETE_PHASE_STATUSES = {"complete", "completed", "done", "ok", "pass", "passed"}
+PHASE_REQUIRED_ARTIFACT_KEYS: dict[int, list[str]] = {
+    0: ["RUN_CONFIG", "TOOL_STATUS", "PROGRESS", "BLOCKED_COMMANDS_ATTEMPTS"],
+    1: ["FILE_INDEX", "INVENTORY", "EVIDENCE_INDEX", "PROVENANCE"],
+    2: ["MANIFESTS", "BUILD_TEST_MAP", "CI_MAP"],
+    3: ["MODULE_GRAPH", "SYMBOL_INDEX", "ARCHITECTURE"],
+    4: ["API_SURFACE", "CLI_SURFACE", "MCP_SURFACE", "CONFIG_SURFACE"],
+    5: ["FEATURE_CATALOG", "PATTERNS", "SPECIAL_IMPLEMENTATIONS"],
+    6: ["RISK_FINDINGS", "RISK_REPORT", "LICENSE_CARDS", "LICENSE_MATRIX", "BINARY_ARTIFACTS"],
+    7: ["PERFORMANCE_REVIEW", "QUALITY_REVIEW", "TEST_COVERAGE_SIGNAL", "AUDIT_RUNTIME_METRICS", "REUSE_CARDS", "REUSE_MAP"],
+    8: ["WIKI_HOME", "WIKI_REPO_SUMMARY", "WIKI_ARCHITECTURE", "WIKI_REUSE_INDEX", "WIKI_RISK_INDEX", "GRAPH", "GRAPH_NODES", "GRAPH_EDGES", "CORPUS_INDEX"],
+    9: ["VALIDATION_REPORT", "VALIDATION_REPORT_JSON", "REPORT", "OPEN_QUESTIONS", "REVIEW_LEDGER", "ADVERSARIAL_REVIEW_PACKET"],
+}
 
 
 def validate_tool_status(payload: dict[str, Any], errors: list[str]) -> None:
@@ -72,6 +85,47 @@ def validate_progress(path: Path, errors: list[str]) -> None:
             errors.append(f"PROGRESS.md missing phase row: {number} {name}")
 
 
+def progress_phase_statuses(audit_dir: Path) -> dict[int, str]:
+    path = audit_dir / ARTIFACT_PATHS["PROGRESS"]
+    if not path.exists():
+        return {}
+    statuses: dict[int, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip(" `") for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 3 or not cells[0].isdigit():
+            continue
+        statuses[int(cells[0])] = cells[2].strip().casefold()
+    return statuses
+
+
+def validate_declared_phase_artifacts(audit_dir: Path, errors: list[str]) -> None:
+    statuses = progress_phase_statuses(audit_dir)
+    phase_names = dict(PHASES)
+    for number, _name in PHASES:
+        status = statuses.get(number, "")
+        if status not in COMPLETE_PHASE_STATUSES:
+            continue
+        for key in PHASE_REQUIRED_ARTIFACT_KEYS.get(number, []):
+            artifact_path = audit_dir / ARTIFACT_PATHS[key]
+            if not artifact_path.exists():
+                errors.append(f"phase {number} {phase_names[number]} declared {status} but missing artifact: {ARTIFACT_PATHS[key]}")
+        if number == 3 and not (audit_dir / ARTIFACT_PATHS["CALL_GRAPH"]).exists() and not (audit_dir / ARTIFACT_PATHS["CALL_GRAPH_SKIPPED"]).exists():
+            errors.append(f"phase {number} {phase_names[number]} declared {status} but missing artifact: {ARTIFACT_PATHS['CALL_GRAPH']} or {ARTIFACT_PATHS['CALL_GRAPH_SKIPPED']}")
+        if number == 6 and not (audit_dir / ARTIFACT_PATHS["SBOM"]).exists() and not (audit_dir / ARTIFACT_PATHS["SBOM_SKIPPED"]).exists():
+            errors.append(f"phase {number} {phase_names[number]} declared {status} but missing artifact: {ARTIFACT_PATHS['SBOM']} or {ARTIFACT_PATHS['SBOM_SKIPPED']}")
+        if number == 8:
+            if not (audit_dir / ARTIFACT_PATHS["GRAPH_HTML"]).exists() and not (audit_dir / ARTIFACT_PATHS["GRAPH_HTML_SKIPPED"]).exists():
+                errors.append(f"phase {number} {phase_names[number]} declared {status} but missing artifact: {ARTIFACT_PATHS['GRAPH_HTML']} or {ARTIFACT_PATHS['GRAPH_HTML_SKIPPED']}")
+            if not (audit_dir / ARTIFACT_PATHS["GRAPHIFY_GRAPH"]).exists() and not (audit_dir / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]).exists():
+                errors.append(f"phase {number} {phase_names[number]} declared {status} but missing artifact: {ARTIFACT_PATHS['GRAPHIFY_GRAPH']} or {ARTIFACT_PATHS['GRAPHIFY_SKIPPED']}")
+            if not (audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE"]).exists() and not (audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE_SKIPPED"]).exists():
+                errors.append(f"phase {number} {phase_names[number]} declared {status} but missing artifact: {ARTIFACT_PATHS['CORPUS_SQLITE']} or {ARTIFACT_PATHS['CORPUS_SQLITE_SKIPPED']}")
+            if not any((audit_dir / ARTIFACT_PATHS[key]).exists() for key in ["MCP_CONFIG", "MCP_DEFERRED", "MCP_COLLISION_REPORT"]):
+                errors.append(f"phase {number} {phase_names[number]} declared {status} but missing MCP handoff artifact")
+
+
 def validate_blocked_attempts(payload: dict[str, Any] | None, errors: list[str]) -> None:
     if payload is None:
         return
@@ -79,6 +133,21 @@ def validate_blocked_attempts(payload: dict[str, Any] | None, errors: list[str])
         errors.append("BLOCKED_COMMANDS_ATTEMPTS.json schema_version must be 1.0")
     if not isinstance(payload.get("attempts"), list):
         errors.append("BLOCKED_COMMANDS_ATTEMPTS.json requires attempts array")
+
+
+def run_config_repo_path(audit_dir: Path) -> Path | None:
+    path = audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    repo = payload.get("repo") if isinstance(payload, dict) else {}
+    repo_path = repo.get("path") if isinstance(repo, dict) else None
+    if not isinstance(repo_path, str) or not repo_path:
+        return None
+    return Path(repo_path).resolve()
 
 
 def validate_phase0(audit_dir: Path) -> ValidationResult:
@@ -121,7 +190,10 @@ def validate_inventory_artifacts(audit_dir: Path) -> ValidationResult:
         errors.append(f"missing required artifact: {inventory_path}")
     if file_index is None:
         return ValidationResult(ok=False, errors=errors)
-    repo_path = Path(str((file_index.get("repo") or {}).get("path") or "."))
+    repo_path = Path(str((file_index.get("repo") or {}).get("path") or ".")).resolve()
+    expected_repo_path = run_config_repo_path(audit_dir)
+    if expected_repo_path is not None and repo_path != expected_repo_path:
+        errors.append("FILE_INDEX.json repo.path differs from RUN_CONFIG.json repo.path")
     records = file_index.get("records")
     if not isinstance(records, list):
         errors.append("FILE_INDEX.json requires records array")
@@ -139,7 +211,13 @@ def validate_inventory_artifacts(audit_dir: Path) -> ValidationResult:
                 errors.append(f"FILE_INDEX.json record {path or index} missing {key}")
         if kind not in KIND_VALUES:
             errors.append(f"invalid file kind for {path}: {kind}")
-        actual = repo_path / path
+        if not is_safe_relative_evidence_path(path):
+            errors.append(f"FILE_INDEX.json record has unsafe source path: {path or '<empty>'}")
+            continue
+        actual = resolve_evidence_source(repo_path, path)
+        if actual is None:
+            errors.append(f"FILE_INDEX.json record has unsafe source path: {path or '<empty>'}")
+            continue
         if not actual.exists():
             errors.append(f"indexed file missing from repo: {path}")
         elif record.get("sha256") and sha256_file(actual) != record["sha256"]:
@@ -162,11 +240,14 @@ def validate_evidence_index_artifact(audit_dir: Path) -> ValidationResult:
     evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"], errors)
     if evidence_index is None:
         return ValidationResult(ok=False, errors=errors)
-    repo_path = Path(str((evidence_index.get("repo") or {}).get("path") or "."))
     evidence_items = evidence_index.get("evidence")
     if not isinstance(evidence_items, list):
         errors.append("EVIDENCE_INDEX.json requires evidence array")
         return ValidationResult(ok=False, errors=errors)
+    repo_path = Path(str((evidence_index.get("repo") or {}).get("path") or ".")).resolve()
+    expected_repo_path = run_config_repo_path(audit_dir)
+    if expected_repo_path is not None and repo_path != expected_repo_path:
+        errors.append("EVIDENCE_INDEX.json repo.path differs from RUN_CONFIG.json repo.path")
     seen: set[str] = set()
     for index, item in enumerate(evidence_items):
         if not isinstance(item, dict):
@@ -387,6 +468,7 @@ def validate_observed_command(command: Any, location: str, errors: list[str]) ->
 def validate_audit(audit_dir: Path) -> ValidationResult:
     phase0 = validate_phase0(audit_dir)
     errors = list(phase0.errors)
+    validate_declared_phase_artifacts(audit_dir, errors)
     if audit_dir.exists():
         errors.extend(validate_json_artifact_schemas(audit_dir))
     if (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).exists():
@@ -422,5 +504,11 @@ def validate_audit(audit_dir: Path) -> ValidationResult:
                 errors.extend(validate_extension_artifacts(audit_dir, evidence_index))
             except Exception as exc:  # noqa: BLE001 - validation must report blockers, not crash.
                 errors.append(f"validation_exception: {type(exc).__name__}: {exc}")
+    try:
+        from .validate_report_packet import validate_review_packet
+
+        validate_review_packet(audit_dir, errors)
+    except Exception as exc:  # noqa: BLE001 - report packet checks must fail as validation blockers.
+        errors.append(f"validation_exception: {type(exc).__name__}: {exc}")
     errors.extend(validate_anti_overclaim_language(audit_dir))
     return ValidationResult(ok=not errors, errors=errors)

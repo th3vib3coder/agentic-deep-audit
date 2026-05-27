@@ -30,6 +30,7 @@ def copy_fixture(name: str, tmp_path: Path) -> Path:
 
 def config_for(repo: Path, output: Path) -> dict:
     return {
+        "schema_version": "1.0",
         "run_id": "run-scientific",
         "repo": {"kind": "local", "path": str(repo), "github": None},
         "profile": "minimal",

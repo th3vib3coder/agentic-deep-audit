@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Binary Artifacts",
+  "type": "object",
+  "required": ["schema_version", "artifacts", "summary"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "artifacts": {"type": "array", "items": {"type": "object", "required": ["artifact_id", "path", "kind", "size_bytes", "triage_triggered", "requires_operator_consent", "evidence_ids"], "properties": {"artifact_id": {"type": "string"}, "path": {"type": "string"}, "kind": {"enum": ["image_or_media", "archive", "native_binary", "wasm", "model_checkpoint", "dataset_blob", "unknown_binary"]}, "size_bytes": {"type": "integer"}, "mime_detected": {"type": ["string", "null"]}, "extension": {"type": ["string", "null"]}, "source_counterpart": {"type": ["string", "null"]}, "triage_triggered": {"type": "boolean"}, "requires_operator_consent": {"type": "boolean"}, "evidence_ids": {"type": "array", "items": {"type": "string"}}}}},
+    "summary": {"type": "object", "required": ["blob_count", "total_binary_bytes", "native_binary_count", "mime_mismatch_count"]}
+  }
+}

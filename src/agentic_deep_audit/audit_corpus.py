@@ -7,7 +7,7 @@ import json
 import re
 import sqlite3
 from contextlib import closing
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .adapters.base import AdapterStatus, append_tool_status
@@ -29,6 +29,7 @@ TEXT_COLUMNS = {
     "corpus_fts": ["source", "source_id", "path", "title", "body", "evidence_ids"],
 }
 REDACTION_MARKER = re.compile(r"<redacted sha256:[0-9a-f]{64}>")
+MAX_TEXT_FILE_BODY_BYTES = 1_000_000
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -143,11 +144,38 @@ def json_text(value: Any) -> str:
     return json.dumps(value if value is not None else [], sort_keys=True)
 
 
-def text_file_body(repo_path: Path, path_value: str, binary: bool) -> str:
+def is_safe_repo_relative_path(path_value: str) -> bool:
+    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
+        return False
+    posix_path = PurePosixPath(path_value)
+    windows_path = PureWindowsPath(path_value)
+    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive or windows_path.root:
+        return False
+    return ".." not in posix_path.parts and ".." not in windows_path.parts
+
+
+def resolve_repo_file(repo_path: Path, path_value: str) -> Path | None:
+    if not is_safe_repo_relative_path(path_value):
+        return None
+    root = repo_path.resolve()
+    candidate = (root / path_value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def text_file_body(repo_path: Path, path_value: str, binary: bool, max_bytes: int = MAX_TEXT_FILE_BODY_BYTES) -> str:
     if binary:
         return ""
     try:
-        return (repo_path / path_value).read_text(encoding="utf-8", errors="replace")
+        path = resolve_repo_file(repo_path, path_value)
+        if path is None or not path.is_file():
+            return ""
+        if path.stat().st_size > max_bytes:
+            return ""
+        return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
 
@@ -191,6 +219,13 @@ def insert_fts(connection: sqlite3.Connection, source: str, source_id: str, path
     )
 
 
+def strict_insert(connection: sqlite3.Connection, table: str, pk_name: str, pk_value: Any, sql: str, params: tuple[Any, ...]) -> None:
+    try:
+        connection.execute(sql, params)
+    except sqlite3.IntegrityError as exc:
+        raise ValueError(f"duplicate {pk_name} in corpus input for {table}: {pk_value}") from exc
+
+
 def populate_files(connection: sqlite3.Connection, file_index: dict[str, Any], repo_path: Path) -> int:
     count = 0
     for record in file_index.get("records", []) if isinstance(file_index.get("records"), list) else []:
@@ -199,8 +234,12 @@ def populate_files(connection: sqlite3.Connection, file_index: dict[str, Any], r
         path_value = record_path(record)
         evidence_ids = [str(item) for item in record.get("evidence_ids") or [] if isinstance(item, str)]
         body, _ = redact_text(text_file_body(repo_path, path_value, bool(record.get("binary"))))
-        connection.execute(
-            "INSERT OR REPLACE INTO files(path, path_normalized, kind, size_bytes, sha256, binary, evidence_ids, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        strict_insert(
+            connection,
+            "files",
+            "path",
+            path_value,
+            "INSERT INTO files(path, path_normalized, kind, size_bytes, sha256, binary, evidence_ids, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (path_value, str(record.get("path_normalized") or path_value), record.get("kind"), int(record.get("size_bytes") or 0), record.get("sha256"), 1 if record.get("binary") else 0, json_text(evidence_ids), body),
         )
         insert_fts(connection, "files", path_value, path_value, path_value, body, evidence_ids)
@@ -214,10 +253,13 @@ def populate_evidence(connection: sqlite3.Connection, evidence_index: dict[str, 
         if not isinstance(item, dict):
             continue
         observed, _ = redact_text(str(item.get("observed") or ""))
-        connection.execute(
-            "INSERT OR REPLACE INTO evidence(evidence_id, path, kind, start_byte, end_byte, start_line, end_line, sha256, observed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (item.get("id"), item.get("path"), item.get("kind"), item.get("start_byte"), item.get("end_byte"), item.get("start_line"), item.get("end_line"), item.get("sha256"), observed),
-        )
+        try:
+            connection.execute(
+                "INSERT INTO evidence(evidence_id, path, kind, start_byte, end_byte, start_line, end_line, sha256, observed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (item.get("id"), item.get("path"), item.get("kind"), item.get("start_byte"), item.get("end_byte"), item.get("start_line"), item.get("end_line"), item.get("sha256"), observed),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"duplicate evidence_id in corpus input: {item.get('id')}") from exc
         insert_fts(connection, "evidence", str(item.get("id")), str(item.get("path") or ""), str(item.get("id")), observed, [str(item.get("id"))] if item.get("id") else [])
         count += 1
     return count
@@ -231,8 +273,12 @@ def populate_symbols(connection: sqlite3.Connection, symbol_index: dict[str, Any
         evidence_ids = [str(item) for item in symbol.get("evidence_ids") or [] if isinstance(item, str)]
         span = symbol.get("span") if isinstance(symbol.get("span"), dict) else {}
         body = f"{symbol.get('name')} {symbol.get('kind')} {symbol.get('path')}"
-        connection.execute(
-            "INSERT OR REPLACE INTO symbols(symbol_id, name, kind, path, start_byte, end_byte, start_line, end_line, evidence_ids, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        strict_insert(
+            connection,
+            "symbols",
+            "symbol_id",
+            symbol.get("symbol_id"),
+            "INSERT INTO symbols(symbol_id, name, kind, path, start_byte, end_byte, start_line, end_line, evidence_ids, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (symbol.get("symbol_id"), symbol.get("name"), symbol.get("kind"), symbol.get("path"), span.get("start_byte"), span.get("end_byte"), span.get("start_line"), span.get("end_line"), json_text(evidence_ids), body),
         )
         insert_fts(connection, "symbols", str(symbol.get("symbol_id")), str(symbol.get("path") or ""), str(symbol.get("name") or ""), body, evidence_ids)
@@ -248,8 +294,12 @@ def populate_claims(connection: sqlite3.Connection, evidence_index: dict[str, An
         claim_id = str(claim.get("claim_id") or f"claim-{count + 1:06d}")
         evidence_ids = [str(item) for item in claim.get("evidence_ids") or [] if isinstance(item, str)]
         body, _ = redact_text(str(claim.get("claim") or claim.get("text") or claim))
-        connection.execute(
-            "INSERT OR REPLACE INTO claims(claim_id, path, kind, body, evidence_ids) VALUES (?, ?, ?, ?, ?)",
+        strict_insert(
+            connection,
+            "claims",
+            "claim_id",
+            claim_id,
+            "INSERT INTO claims(claim_id, path, kind, body, evidence_ids) VALUES (?, ?, ?, ?, ?)",
             (claim_id, claim.get("path"), claim.get("kind"), body, json_text(evidence_ids)),
         )
         insert_fts(connection, "claims", claim_id, str(claim.get("path") or ""), claim_id, body, evidence_ids)
@@ -260,13 +310,18 @@ def populate_claims(connection: sqlite3.Connection, evidence_index: dict[str, An
 def populate_graph(connection: sqlite3.Connection, graph: dict[str, Any]) -> dict[str, int]:
     node_count = 0
     edge_count = 0
+    seen_edges: set[tuple[str, str, str]] = set()
     for node in graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []:
         if not isinstance(node, dict):
             continue
         evidence_ids = [str(item) for item in node.get("evidence_ids") or [] if isinstance(item, str)]
         body = f"{node.get('id')} {node.get('type')} {node.get('label')}"
-        connection.execute(
-            "INSERT OR REPLACE INTO graph_nodes(node_id, type, label, path, centrality_score, evidence_ids, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        strict_insert(
+            connection,
+            "graph_nodes",
+            "node_id",
+            node.get("id"),
+            "INSERT INTO graph_nodes(node_id, type, label, path, centrality_score, evidence_ids, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (node.get("id"), node.get("type"), node.get("label"), node.get("path"), node.get("centrality_score"), json_text(evidence_ids), body),
         )
         insert_fts(connection, "graph", str(node.get("id")), str(node.get("path") or ""), str(node.get("label") or ""), body, evidence_ids)
@@ -274,11 +329,19 @@ def populate_graph(connection: sqlite3.Connection, graph: dict[str, Any]) -> dic
     for edge in graph.get("edges", []) if isinstance(graph.get("edges"), list) else []:
         if not isinstance(edge, dict):
             continue
-        edge_id = f"{edge.get('source')}->{edge.get('target')}:{edge.get('type')}:{edge_count + 1}"
+        edge_key = (str(edge.get("source") or ""), str(edge.get("target") or ""), str(edge.get("type") or ""))
+        if edge_key in seen_edges:
+            raise ValueError(f"duplicate edge_id in corpus input for graph_edges: {edge_key[0]}->{edge_key[1]}:{edge_key[2]}")
+        seen_edges.add(edge_key)
+        edge_id = f"{edge_key[0]}->{edge_key[1]}:{edge_key[2]}"
         evidence_ids = [str(item) for item in edge.get("evidence_ids") or [] if isinstance(item, str)]
         body = f"{edge.get('source')} {edge.get('target')} {edge.get('type')}"
-        connection.execute(
-            "INSERT OR REPLACE INTO graph_edges(edge_id, source, target, type, weight, evidence_ids, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        strict_insert(
+            connection,
+            "graph_edges",
+            "edge_id",
+            edge_id,
+            "INSERT INTO graph_edges(edge_id, source, target, type, weight, evidence_ids, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (edge_id, edge.get("source"), edge.get("target"), edge.get("type"), edge.get("weight"), json_text(evidence_ids), body),
         )
         insert_fts(connection, "graph", edge_id, "", edge_id, body, evidence_ids)
@@ -312,8 +375,12 @@ def populate_wiki(connection: sqlite3.Connection, audit_dir: Path) -> int:
         evidence_ids = sorted(set(re.findall(r"ev-\d{6}", body)))
         title = markdown_title(body, path)
         kind = wiki_type(path.relative_to(root))
-        connection.execute(
-            "INSERT OR REPLACE INTO wiki_pages(path, title, type, evidence_ids, body) VALUES (?, ?, ?, ?, ?)",
+        strict_insert(
+            connection,
+            "wiki_pages",
+            "path",
+            relative,
+            "INSERT INTO wiki_pages(path, title, type, evidence_ids, body) VALUES (?, ?, ?, ?, ?)",
             (relative, title, kind, json_text(evidence_ids), body),
         )
         insert_fts(connection, "wiki", relative, relative, title, body, evidence_ids)
@@ -455,8 +522,13 @@ def run_corpus(run_config: dict[str, Any], audit_dir: Path) -> None:
 
 
 def fts_query(value: str) -> str:
-    tokens = re.findall(r"[A-Za-z0-9_./:-]+", value)
+    tokens = re.findall(r"[A-Za-z0-9_./:-]+", value[:200])
     return " OR ".join(tokens[:8]) if tokens else value
+
+
+def like_query(value: str) -> str:
+    escaped = value[:200].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def evidence_ranges(connection: sqlite3.Connection, evidence_ids: list[str]) -> list[dict[str, Any]]:
@@ -470,14 +542,16 @@ def evidence_ranges(connection: sqlite3.Connection, evidence_ids: list[str]) -> 
 
 def ranked_source_rows(connection: sqlite3.Connection, query: str, limit: int) -> dict[str, list[dict[str, Any]]]:
     rows: dict[str, list[dict[str, Any]]] = {"fts": [], "symbol": [], "graph": [], "manifest": []}
-    for rank, row in enumerate(connection.execute("SELECT source, source_id, path, title, evidence_ids, bm25(corpus_fts) AS score FROM corpus_fts WHERE corpus_fts MATCH ? ORDER BY score LIMIT ?", (fts_query(query), limit)).fetchall(), start=1):
-        rows["fts"].append({"rank": rank, "id": f"{row[0]}:{row[1]}", "source": row[0], "source_id": row[1], "path": row[2], "title": row[3], "evidence_ids": json.loads(row[4] or "[]")})
-    like = f"%{query}%"
-    for rank, row in enumerate(connection.execute("SELECT symbol_id, name, path, evidence_ids FROM symbols WHERE name LIKE ? OR body LIKE ? LIMIT ?", (like, like, limit)).fetchall(), start=1):
+    fts = fts_query(query)
+    if fts and re.search(r"[A-Za-z0-9_./:-]", fts):
+        for rank, row in enumerate(connection.execute("SELECT source, source_id, path, title, evidence_ids, bm25(corpus_fts) AS score FROM corpus_fts WHERE corpus_fts MATCH ? ORDER BY score LIMIT ?", (fts, limit)).fetchall(), start=1):
+            rows["fts"].append({"rank": rank, "id": f"{row[0]}:{row[1]}", "source": row[0], "source_id": row[1], "path": row[2], "title": row[3], "evidence_ids": json.loads(row[4] or "[]")})
+    like = like_query(query)
+    for rank, row in enumerate(connection.execute("SELECT symbol_id, name, path, evidence_ids FROM symbols WHERE name LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' LIMIT ?", (like, like, limit)).fetchall(), start=1):
         rows["symbol"].append({"rank": rank, "id": f"symbols:{row[0]}", "source": "symbols", "source_id": row[0], "path": row[2], "title": row[1], "evidence_ids": json.loads(row[3] or "[]")})
-    for rank, row in enumerate(connection.execute("SELECT node_id, label, path, evidence_ids FROM graph_nodes WHERE node_id LIKE ? OR label LIKE ? OR body LIKE ? LIMIT ?", (like, like, like, limit)).fetchall(), start=1):
+    for rank, row in enumerate(connection.execute("SELECT node_id, label, path, evidence_ids FROM graph_nodes WHERE node_id LIKE ? ESCAPE '\\' OR label LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' LIMIT ?", (like, like, like, limit)).fetchall(), start=1):
         rows["graph"].append({"rank": rank, "id": f"graph:{row[0]}", "source": "graph", "source_id": row[0], "path": row[2] or "", "title": row[1], "evidence_ids": json.loads(row[3] or "[]")})
-    for rank, row in enumerate(connection.execute("SELECT path, kind, evidence_ids FROM files WHERE kind = 'manifest' AND body LIKE ? LIMIT ?", (like, limit)).fetchall(), start=1):
+    for rank, row in enumerate(connection.execute("SELECT path, kind, evidence_ids FROM files WHERE kind = 'manifest' AND body LIKE ? ESCAPE '\\' LIMIT ?", (like, limit)).fetchall(), start=1):
         rows["manifest"].append({"rank": rank, "id": f"manifest:{row[0]}", "source": "files", "source_id": row[0], "path": row[0], "title": row[1], "evidence_ids": json.loads(row[2] or "[]")})
     return rows
 

@@ -311,6 +311,22 @@ def test_evidence_validation_rejects_repo_path_different_from_provenance_target(
     assert any("repo.path differs from PROVENANCE.json target path" in error for error in validation.errors)
 
 
+def test_evidence_validation_rejects_repo_path_different_from_run_config(tmp_path: Path) -> None:
+    repo, audit_dir = run_inventory(tmp_path)
+    mirror = tmp_path / "mirror"
+    shutil.copytree(repo, mirror, ignore=shutil.ignore_patterns("audit"))
+    (audit_dir / ARTIFACT_PATHS["PROVENANCE"]).unlink()
+    evidence_path = audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]
+    payload = load_evidence(audit_dir)
+    payload["repo"]["path"] = str(mirror)
+    evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    validation = validate_evidence_index_artifact(audit_dir)
+
+    assert not validation.ok
+    assert any("repo.path differs from RUN_CONFIG.json repo.path" in error for error in validation.errors)
+
+
 def test_evidence_validation_rejects_commit_presence_mismatch_with_provenance(tmp_path: Path) -> None:
     _, audit_dir = run_inventory(tmp_path)
     evidence_path = audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]

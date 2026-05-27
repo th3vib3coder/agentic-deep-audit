@@ -7,7 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agentic_deep_audit.config import load_config_file, normalize_run_config, ArgvOverrides
+import pytest
+
+from agentic_deep_audit.config import ConfigError, load_config_file, load_yaml_config_text, normalize_run_config, ArgvOverrides
 from agentic_deep_audit.config import load_run_config
 
 
@@ -43,6 +45,10 @@ graph:
         encoding="utf-8",
     )
     return config
+
+
+def portable_path(path: Path) -> str:
+    return path.as_posix()
 
 
 def run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -94,7 +100,11 @@ def test_empty_allowed_languages_canonicalizes_to_all_languages(tmp_path: Path) 
     config = {
         "schema_version": "1.0",
         "repo": {"kind": "local", "path": ".", "github": None},
+        "profile": "minimal",
+        "mode": "source-audit",
+        "output_dir": "audit",
         "target_context": {"reuse_policy": "custom", "allowed_languages": [], "license_tolerance": "none"},
+        "binary_triage_consent": False,
     }
 
     normalized = normalize_run_config(config, ArgvOverrides(command="run", argv=["run"]), None)
@@ -111,6 +121,7 @@ def test_run_config_input_recanonicalizes_empty_allowed_languages(tmp_path: Path
         "mode": "source-audit",
         "output_dir": str(tmp_path / "audit"),
         "target_context": {"reuse_policy": "legacy", "allowed_languages": [], "license_tolerance": "none"},
+        "binary_triage_consent": False,
     }
     path = tmp_path / "RUN_CONFIG.json"
     path.write_text(json.dumps(run_config, indent=2) + "\n", encoding="utf-8")
@@ -139,7 +150,11 @@ def test_retrieval_rrf_defaults_and_config_override_source(tmp_path: Path) -> No
     config = {
         "schema_version": "1.0",
         "repo": {"kind": "local", "path": ".", "github": None},
+        "profile": "minimal",
+        "mode": "source-audit",
+        "output_dir": "audit",
         "target_context": "MIT downstream",
+        "binary_triage_consent": False,
         "retrieval": {"rrf": {"k": 42, "weights": {"fts": 2.0}}},
     }
 
@@ -160,7 +175,10 @@ def test_argv_overrides_are_recorded_and_run_config_written(tmp_path: Path) -> N
     assert result.returncode == 0, result.stderr
     run_config = json.loads((output_dir / "RUN_CONFIG.json").read_text(encoding="utf-8"))
     assert run_config["profile"] == "standard"
-    assert run_config["output_dir"] == str(output_dir)
+    assert run_config["run_id"].startswith("run-")
+    assert "pid" not in run_config["run_id"]
+    assert run_config["run_id"].endswith("Z")
+    assert run_config["output_dir"] == portable_path(output_dir)
     assert run_config["override_source"] == {"profile": "argv", "output_dir": "argv"}
     assert run_config["provenance"]["config_sha256"]
     assert "repo.path" in run_config["provenance"]["environment_specific_paths"]
@@ -177,7 +195,7 @@ def test_run_config_round_trip_via_run_config_input(tmp_path: Path) -> None:
 
     assert second.returncode == 0, second.stderr
     rerun = json.loads((second_output / "RUN_CONFIG.json").read_text(encoding="utf-8"))
-    assert rerun["output_dir"] == str(second_output)
+    assert rerun["output_dir"] == portable_path(second_output)
     assert rerun["target_context"]["reuse_policy"] == "MIT downstream"
 
 
@@ -186,8 +204,11 @@ def test_load_run_config_does_not_mutate_original_dict(tmp_path: Path) -> None:
         "schema_version": "1.0",
         "run_id": "run-immutable",
         "repo": {"kind": "local", "path": str(tmp_path), "github": None},
+        "profile": "minimal",
+        "mode": "source-audit",
         "output_dir": str(tmp_path / "audit"),
         "target_context": {"reuse_policy": "legacy", "allowed_languages": [], "license_tolerance": "none"},
+        "binary_triage_consent": False,
     }
     preserved = copy.deepcopy(original)
     path = tmp_path / "RUN_CONFIG.json"
@@ -232,6 +253,7 @@ def test_dry_run_reports_planned_work_without_writing_artifacts(tmp_path: Path) 
         "TOOL_STATUS.json",
         "PROGRESS.md",
         "VALIDATION_REPORT.md",
+        "VALIDATION_REPORT.json",
         "REPORT.md",
         "OPEN_QUESTIONS.md",
         "REVIEW_LEDGER.md",
@@ -299,3 +321,216 @@ def test_missing_config_path_fails_with_clear_error(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert "error: config file not found:" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_yaml_lists_and_bom_are_parsed_with_schema_validation(tmp_path: Path) -> None:
+    config = tmp_path / "audit.config.yaml"
+    config.write_text(
+        "\ufeff"
+        + """
+schema_version: "1.0"
+repo:
+  kind: "local"
+  path: "."
+  github: null
+profile: "minimal"
+mode: "source-audit"
+output_dir: "audit"
+target_context:
+  reuse_policy: "custom"
+  allowed_languages:
+    - "python"
+    - "r"
+  license_tolerance: "permissive-only"
+binary_triage_consent: false
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    normalized = normalize_run_config(
+        load_config_file(config),
+        ArgvOverrides(command="run", argv=["run", "--config", str(config)]),
+        config,
+    )
+
+    assert normalized["target_context"]["allowed_languages"] == ["python", "r"]
+
+
+def test_windows_double_quoted_backslash_paths_are_not_decoded_as_yaml_escapes() -> None:
+    data = load_yaml_config_text('output_dir: "C:\\temp\\repo"\n')
+
+    assert data["output_dir"] == r"C:\temp\repo"
+
+
+def test_windows_double_quoted_paths_in_flow_lists_are_not_decoded_as_yaml_escapes() -> None:
+    data = load_yaml_config_text('paths: ["C:\\temp\\repo", "plain"]\n')
+
+    assert data["paths"][0] == r"C:\temp\repo"
+    assert data["paths"][1] == "plain"
+
+
+def test_windows_path_escape_workaround_does_not_rewrite_non_path_regex_or_block_scalar() -> None:
+    data = load_yaml_config_text('pattern: "[A-Z]:\\\\d+"\nnotes: |\n  "C:\\temp\\repo"\n')
+
+    assert data["pattern"] == r"[A-Z]:\d+"
+    assert data["notes"] == '"C:\\temp\\repo"\n'
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path escape regression is platform-specific")
+def test_windows_repo_path_in_double_quotes_resolves_without_escape_corruption(tmp_path: Path) -> None:
+    repo_path = str(tmp_path)
+    config_path = tmp_path / "audit.config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                'schema_version: "1.0"',
+                "repo:",
+                '  kind: "local"',
+                f'  path: "{repo_path}"',
+                "  github: null",
+                'profile: "minimal"',
+                'mode: "source-audit"',
+                'output_dir: "audit"',
+                'target_context: "MIT downstream"',
+                "binary_triage_consent: false",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    normalized = normalize_run_config(load_config_file(config_path), ArgvOverrides(command="run", argv=["run"]), config_path)
+
+    assert normalized["repo"]["path"] == portable_path(Path(repo_path).resolve())
+
+
+def test_schema_required_fields_are_not_silently_defaulted(tmp_path: Path) -> None:
+    data = {"repo": {"kind": "local", "path": ".", "github": None}}
+
+    with pytest.raises(ConfigError, match="config schema invalid"):
+        normalize_run_config(data, ArgvOverrides(command="run", argv=["run"]), tmp_path / "audit.config.yaml")
+
+
+def test_invalid_config_schema_fails_before_bootstrap(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    data = load_config_file(config)
+    data["repo"]["path"] = 123
+
+    with pytest.raises(ConfigError, match="config schema invalid"):
+        normalize_run_config(data, ArgvOverrides(command="run", argv=["run"]), config)
+
+
+def test_local_repo_path_must_exist(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    data = load_config_file(config)
+    data["repo"]["path"] = "missing"
+
+    with pytest.raises(ConfigError, match="repo.path does not exist"):
+        normalize_run_config(data, ArgvOverrides(command="run", argv=["run"]), config)
+
+
+def test_local_repo_path_must_stay_under_allowed_roots(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    data = load_config_file(config)
+    data["repo"]["path"] = str(outside)
+
+    with pytest.raises(ConfigError, match="repo.path outside allowed root"):
+        normalize_run_config(data, ArgvOverrides(command="run", argv=["run"]), config)
+
+    normalized = normalize_run_config(data, ArgvOverrides(command="run", argv=["run"], allowed_roots=(str(outside),)), config)
+
+    assert normalized["repo"]["path"] == portable_path(outside.resolve())
+
+
+def test_default_home_root_does_not_allow_private_system_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_home = tmp_path / "home"
+    private_repo = fake_home / ".ssh"
+    private_repo.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    monkeypatch.chdir(fake_home)
+    data = {
+        "schema_version": "1.0",
+        "repo": {"kind": "local", "path": ".ssh", "github": None},
+        "profile": "minimal",
+        "mode": "source-audit",
+        "output_dir": "audit",
+        "target_context": "MIT downstream",
+        "binary_triage_consent": False,
+    }
+
+    with pytest.raises(ConfigError, match="sensitive system path"):
+        normalize_run_config(data, ArgvOverrides(command="run", argv=["run"]), None)
+
+    normalized = normalize_run_config(
+        data,
+        ArgvOverrides(command="run", argv=["run"], allowed_roots=(str(fake_home),), allow_system_roots=True),
+        None,
+    )
+
+    assert normalized["repo"]["path"] == portable_path(private_repo.resolve())
+
+
+def test_output_dir_must_stay_under_allowed_roots(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    data = load_config_file(config)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-audit"
+    data["output_dir"] = str(outside)
+
+    with pytest.raises(ConfigError, match="output_dir outside allowed root"):
+        normalize_run_config(data, ArgvOverrides(command="run", argv=["run"]), config)
+
+
+def test_run_config_rejects_invalid_repo_kind(tmp_path: Path) -> None:
+    run_config = {
+        "schema_version": "1.0",
+        "run_id": "run-invalid",
+        "repo": {"kind": "remote", "path": str(tmp_path), "github": None},
+        "profile": "minimal",
+        "mode": "source-audit",
+        "output_dir": str(tmp_path / "audit"),
+        "target_context": "MIT downstream",
+        "binary_triage_consent": False,
+    }
+    path = tmp_path / "RUN_CONFIG.json"
+    path.write_text(json.dumps(run_config) + "\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="config schema invalid at repo.kind"):
+        load_run_config(path, ArgvOverrides(command="run", argv=["run"]))
+
+
+def test_run_config_rejects_github_without_remote(tmp_path: Path) -> None:
+    run_config = {
+        "schema_version": "1.0",
+        "run_id": "run-invalid",
+        "repo": {"kind": "github", "path": None, "github": None},
+        "profile": "minimal",
+        "mode": "source-audit",
+        "output_dir": str(tmp_path / "audit"),
+        "target_context": "MIT downstream",
+        "binary_triage_consent": False,
+    }
+    path = tmp_path / "RUN_CONFIG.json"
+    path.write_text(json.dumps(run_config) + "\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="repo.github is required"):
+        load_run_config(path, ArgvOverrides(command="run", argv=["run"]))
+
+
+def test_run_config_schema_validation_rejects_missing_required_fields(tmp_path: Path) -> None:
+    run_config = {
+        "schema_version": "1.0",
+        "run_id": "run-invalid",
+        "repo": {"kind": "local", "path": str(tmp_path), "github": None},
+        "profile": "minimal",
+        "mode": "source-audit",
+        "output_dir": str(tmp_path / "audit"),
+        "target_context": "MIT downstream",
+    }
+    path = tmp_path / "RUN_CONFIG.json"
+    path.write_text(json.dumps(run_config) + "\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="config schema invalid"):
+        load_run_config(path, ArgvOverrides(command="run", argv=["run"]))

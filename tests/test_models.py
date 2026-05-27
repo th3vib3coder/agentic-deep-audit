@@ -10,21 +10,21 @@ from agentic_deep_audit.models import ARTIFACT_PATHS, SCHEMA_FILES, SchemaRegist
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-def output_reference_artifacts() -> set[str]:
-    reference = (PLUGIN_ROOT / "skills" / "deep-repo-audit" / "references" / "output_artifacts.md").read_text(encoding="utf-8")
-    artifact_cells = re.findall(r"`([^`]+)`", reference)
-    artifacts: set[str] = set()
-    for cell in artifact_cells:
-        if any(suffix in cell for suffix in [".json", ".md", ".yaml", ".sqlite", ".html"]):
-            artifacts.add(cell)
-    return artifacts
+OUTPUT_ARTIFACTS_REFERENCE = PLUGIN_ROOT / "skills" / "deep-repo-audit" / "references" / "output_artifacts.md"
+
+
+def documented_artifacts() -> set[str]:
+    reference = OUTPUT_ARTIFACTS_REFERENCE.read_text(encoding="utf-8")
+    return set(re.findall(r"`([^`]+)`", reference))
 
 
 def test_artifact_constants_cover_output_reference() -> None:
     values = set(ARTIFACT_PATHS.values())
-    missing = sorted(output_reference_artifacts() - values)
+    missing = sorted(documented_artifacts() - values)
+    undocumented = sorted(values - documented_artifacts())
 
     assert not missing
+    assert not undocumented
 
 
 def test_schema_registry_loads_all_bundled_schema_json() -> None:

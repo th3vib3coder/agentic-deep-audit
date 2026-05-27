@@ -7,9 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agentic_deep_audit.audit_report import ReportGateError, generate_report_artifacts
+from agentic_deep_audit.audit_report import ReportGateError, artifact_inventory, generate_report_artifacts, validation_passed
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
+from agentic_deep_audit.validate_report_packet import validate_review_packet
 
 SRC_ROOT = PLUGIN_ROOT / "src"
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
@@ -83,6 +84,32 @@ def test_generate_report_artifacts_rechecks_fresh_artifacts_before_packet(tmp_pa
     assert not packet.exists()
 
 
+def test_artifact_inventory_excludes_secret_named_files(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    (audit_dir / "REPORT.md").write_text("report", encoding="utf-8")
+    (audit_dir / ".env").write_text("PASSWORD=secret", encoding="utf-8")
+    (audit_dir / ".ENV").write_text("PASSWORD=secret", encoding="utf-8")
+    (audit_dir / "credentials.json").write_text("{}", encoding="utf-8")
+    (audit_dir / "SECRET.txt").write_text("secret", encoding="utf-8")
+    (audit_dir / "id_rsa").write_text("key", encoding="utf-8")
+
+    names = {name for name, _size, _digest in artifact_inventory(audit_dir)}
+
+    assert names == {"REPORT.md"}
+
+
+def test_validation_passed_requires_structured_report(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    (audit_dir / ARTIFACT_PATHS["VALIDATION_REPORT"]).write_text(
+        "# Validation Report\n\n- Status: `pass`\n- Blocker count: `0`\n",
+        encoding="utf-8",
+    )
+
+    assert validation_passed(audit_dir) is False
+
+
 def test_validate_rechecks_fresh_artifacts_before_review_packet(tmp_path: Path) -> None:
     audit_dir = build_validated_audit(tmp_path)
     packet = audit_dir / ARTIFACT_PATHS["ADVERSARIAL_REVIEW_PACKET"]
@@ -115,6 +142,17 @@ def test_partial_validate_does_not_emit_final_packet(tmp_path: Path) -> None:
         assert not (audit_dir / ARTIFACT_PATHS[key]).exists()
 
 
+def test_review_packet_missing_is_blocker_when_run_config_ready_for_review(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    (audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).write_text(json.dumps({"ready_for_review": True}) + "\n", encoding="utf-8")
+    errors: list[str] = []
+
+    validate_review_packet(audit_dir, errors)
+
+    assert any("ready_for_review is true" in error for error in errors)
+
+
 def test_review_ledger_rejects_self_acceptance(tmp_path: Path) -> None:
     audit_dir = build_validated_audit(tmp_path)
     ledger = audit_dir / ARTIFACT_PATHS["REVIEW_LEDGER"]
@@ -123,6 +161,23 @@ def test_review_ledger_rejects_self_acceptance(tmp_path: Path) -> None:
         "| Artifact | Author | Reviewer | Decision | Evidence |\n"
         "|---|---|---|---|---|\n"
         "| `REPORT.md` | same_agent | same_agent | ACCEPT | synthetic |\n",
+        encoding="utf-8",
+    )
+
+    result = validate_audit(audit_dir)
+
+    assert not result.ok
+    assert any("self-acceptance" in error for error in result.errors)
+
+
+def test_review_ledger_rejects_self_accepted_variant_casefold(tmp_path: Path) -> None:
+    audit_dir = build_validated_audit(tmp_path)
+    ledger = audit_dir / ARTIFACT_PATHS["REVIEW_LEDGER"]
+    ledger.write_text(
+        "# Review Ledger\n\n"
+        "| Artifact | Author | Reviewer | Decision | Evidence |\n"
+        "|---|---|---|---|---|\n"
+        "| `REPORT.md` | Same_Agent | same_agent | ACCEPTED | synthetic |\n",
         encoding="utf-8",
     )
 

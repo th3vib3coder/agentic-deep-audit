@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Suspicious Behaviors",
+  "type": "object",
+  "required": ["schema_version", "behaviors"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "behaviors": {"type": "array", "items": {"type": "object", "required": ["behavior_id", "kind", "evidence_ids", "severity", "confidence", "source"], "properties": {"behavior_id": {"type": "string"}, "kind": {"type": "string"}, "subkind": {"type": ["string", "null"]}, "path": {"type": ["string", "null"]}, "evidence_ids": {"type": "array", "items": {"type": "string"}}, "severity": {"enum": ["critical", "high", "medium", "low", "info"]}, "confidence": {"enum": ["high", "medium", "low"]}, "source": {"type": "string"}, "linked_findings": {"type": "array", "items": {"type": "string"}}}}}
+  }
+}

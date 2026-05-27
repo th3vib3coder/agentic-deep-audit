@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
+import agentic_deep_audit.audit_provenance as audit_provenance
 from agentic_deep_audit.audit_validate import validate_audit, validate_provenance_artifact
+from agentic_deep_audit.audit_provenance import run_git_command
 from agentic_deep_audit.models import ARTIFACT_PATHS
 
 
@@ -250,3 +252,63 @@ def test_missing_git_executable_emits_provenance_fallback(tmp_path: Path) -> Non
     assert git["limitations"] == ["git executable not found"]
     assert git["commands"][0]["command"] == ["git", "rev-parse", "--show-toplevel"]
     assert git["commands"][0]["skipped_reason"] == "git executable not found"
+
+
+def test_run_git_command_rejects_git_executable_inside_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_git = tmp_path / ("git.cmd" if os.name == "nt" else "git")
+    fake_git.write_text("@echo poisoned\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    completed, record = run_git_command(tmp_path, ["rev-parse", "--show-toplevel"])
+
+    assert completed.returncode == 127
+    assert "inside target repo rejected" in record["skipped_reason"]
+
+
+def test_run_git_command_rejects_git_executable_inside_parent_repo_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    subdir = repo / "pkg"
+    subdir.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    fake_git = repo / ("git.cmd" if os.name == "nt" else "git")
+    fake_git.write_text("@echo poisoned\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(repo))
+
+    completed, record = run_git_command(subdir, ["rev-parse", "--show-toplevel"])
+
+    assert completed.returncode == 127
+    assert "inside target repo rejected" in record["skipped_reason"]
+
+
+def test_run_git_command_hardens_environment_and_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    external = tmp_path.parent / f"{tmp_path.name}-bin"
+    external.mkdir()
+    fake_git = external / ("git.exe" if os.name == "nt" else "git")
+    fake_git.write_text("", encoding="utf-8")
+    observed: dict[str, object] = {}
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-value")
+    monkeypatch.setattr(audit_provenance.shutil, "which", lambda _tool: str(fake_git))
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        observed["command"] = command
+        observed["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(audit_provenance.subprocess, "run", fake_run)
+
+    completed, record = run_git_command(tmp_path, ["status", "--porcelain"])
+
+    command = observed["command"]
+    env = observed["env"]
+    assert completed.returncode == 0
+    assert record["decision"] == "allow"
+    assert "core.fsmonitor=false" in command
+    assert f"core.hooksPath={os.devnull}" in command
+    assert "uploadpack.packObjectsHook=" in command
+    assert "protocol.ext.allow=never" in command
+    assert "protocol.file.allow=never" in command
+    assert "safe.directory=*" in command
+    assert isinstance(env, dict)
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "ANTHROPIC_API_KEY" not in env

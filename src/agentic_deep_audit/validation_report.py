@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .audit_validate_common import ValidationResult
@@ -36,4 +37,20 @@ def write_validation_report(audit_dir: Path, result: ValidationResult, command: 
         lines.append("- None.")
     lines.extend(["", "## Commands Run", "", f"- `{command}`", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
+    json_path = audit_dir / ARTIFACT_PATHS["VALIDATION_REPORT_JSON"]
+    json_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "command": command,
+                "status": "pass" if result.ok else "blocker",
+                "blocker_count": len(blockers),
+                "blockers": blockers,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return path

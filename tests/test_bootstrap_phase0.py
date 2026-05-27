@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agentic_deep_audit.audit_validate import validate_phase0
+from agentic_deep_audit.audit_validate import validate_audit, validate_phase0
 from agentic_deep_audit.bootstrap import PHASES
 from agentic_deep_audit.config import sha256_file
 from agentic_deep_audit.models import ARTIFACT_PATHS
@@ -146,6 +146,27 @@ def test_tool_status_records_version_or_skip_reason_and_progress_phases(tmp_path
 
     blocked = json.loads((audit_dir / ARTIFACT_PATHS["BLOCKED_COMMANDS_ATTEMPTS"]).read_text(encoding="utf-8"))
     assert blocked == {"schema_version": "1.0", "attempts": []}
+
+
+def test_validate_audit_requires_artifacts_for_completed_progress_phases(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = subprocess.run(
+        [sys.executable, str(BOOTSTRAP_SCRIPT), "--config", str(config)],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    audit_dir = tmp_path / "audit"
+    progress_path = audit_dir / ARTIFACT_PATHS["PROGRESS"]
+    progress = progress_path.read_text(encoding="utf-8")
+    progress_path.write_text(progress.replace("| 1 | Inventory E Provenance | pending |", "| 1 | Inventory E Provenance | complete |"), encoding="utf-8")
+
+    validation = validate_audit(audit_dir)
+
+    assert not validation.ok
+    assert any("phase 1 Inventory E Provenance declared complete" in error and "FILE_INDEX.json" in error for error in validation.errors)
 
 
 def test_bootstrap_rejects_output_outside_allowed_root(tmp_path: Path) -> None:

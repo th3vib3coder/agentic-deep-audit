@@ -8,7 +8,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agentic_deep_audit.audit_corpus import TABLES, create_schema, query_corpus, run_corpus
+from agentic_deep_audit.audit_corpus import (
+    TABLES,
+    create_schema,
+    populate_claims,
+    populate_evidence,
+    populate_files,
+    populate_graph,
+    populate_symbols,
+    populate_wiki,
+    query_corpus,
+    run_corpus,
+    text_file_body,
+)
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 
@@ -57,6 +69,91 @@ def test_corpus_schema_creates_required_tables() -> None:
     assert "corpus_fts" in tables
 
 
+def test_text_file_body_enforces_containment_and_size_cap(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ok.txt").write_text("ok", encoding="utf-8")
+    large = repo / "large.txt"
+    large.write_text("x" * 32, encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    assert text_file_body(repo, "ok.txt", False) == "ok"
+    assert text_file_body(repo, "../outside.txt", False) == ""
+    assert text_file_body(repo, "large.txt", False, max_bytes=8) == ""
+
+
+def test_populate_evidence_rejects_duplicate_ids() -> None:
+    with sqlite3.connect(":memory:") as connection:
+        create_schema(connection)
+        payload = {"evidence": [{"id": "ev-000001", "path": "a.py"}, {"id": "ev-000001", "path": "b.py"}]}
+
+        try:
+            populate_evidence(connection, payload)
+        except ValueError as exc:
+            assert "duplicate evidence_id" in str(exc)
+        else:
+            raise AssertionError("duplicate evidence id was silently accepted")
+
+
+def test_corpus_populators_reject_duplicate_primary_keys(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("print('a')\n", encoding="utf-8")
+
+    cases = [
+        (
+            populate_files,
+            ({"records": [{"path": "a.py", "path_normalized": "a.py"}, {"path": "a.py", "path_normalized": "a.py"}]}, repo),
+            "files",
+        ),
+        (
+            populate_symbols,
+            ({"symbols": [{"symbol_id": "sym-1", "name": "a"}, {"symbol_id": "sym-1", "name": "b"}]},),
+            "symbols",
+        ),
+        (
+            populate_claims,
+            ({"claims": [{"claim_id": "claim-1", "claim": "a"}, {"claim_id": "claim-1", "claim": "b"}]},),
+            "claims",
+        ),
+        (
+            populate_graph,
+            ({"nodes": [{"id": "n1"}, {"id": "n1"}], "edges": []},),
+            "graph_nodes",
+        ),
+        (
+            populate_graph,
+            ({"nodes": [], "edges": [{"source": "a", "target": "b", "type": "depends_on"}, {"source": "a", "target": "b", "type": "depends_on"}]},),
+            "graph_edges",
+        ),
+    ]
+
+    for function, args, table in cases:
+        with sqlite3.connect(":memory:") as connection:
+            create_schema(connection)
+            try:
+                function(connection, *args)
+            except ValueError as exc:
+                assert table in str(exc)
+            else:
+                raise AssertionError(f"duplicate primary key was silently accepted for {table}")
+
+    audit_dir = tmp_path / "audit"
+    page = audit_dir / "wiki" / "page.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("# Page\n", encoding="utf-8")
+    with sqlite3.connect(":memory:") as connection:
+        create_schema(connection)
+        populate_wiki(connection, audit_dir)
+        try:
+            populate_wiki(connection, audit_dir)
+        except ValueError as exc:
+            assert "wiki_pages" in str(exc)
+        else:
+            raise AssertionError("duplicate wiki page was silently accepted")
+
+
 def test_run_command_wires_corpus_outputs_and_smoke_query(tmp_path: Path) -> None:
     audit_dir = run_corpus_fixture(tmp_path)
 
@@ -73,6 +170,13 @@ def test_run_command_wires_corpus_outputs_and_smoke_query(tmp_path: Path) -> Non
     assert any(result["evidence_ranges"] for result in results)
     assert any("symbol" in result["contributions"] for result in results)
     assert validate_audit(audit_dir).ok
+
+
+def test_query_corpus_escapes_like_wildcards(tmp_path: Path) -> None:
+    audit_dir = run_corpus_fixture(tmp_path)
+    wildcard_results = query_corpus(audit_dir, "%", limit=10)
+
+    assert wildcard_results == []
 
 
 def test_corpus_redacts_secret_like_tokens_before_exposure(tmp_path: Path) -> None:

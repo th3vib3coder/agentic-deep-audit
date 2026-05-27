@@ -20,7 +20,10 @@ def load_json(path: Path, errors: list[str]) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         errors.append(f"invalid MCP JSON artifact: {path}: {exc}")
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        errors.append(f"invalid MCP JSON artifact: {path}: root must be object")
+        return {}
+    return payload
 
 
 def collect_strings(value: Any) -> list[str]:
@@ -42,8 +45,8 @@ def artifact_set(audit_dir: Path) -> list[str]:
     return [key for key in MCP_KEYS if (audit_dir / ARTIFACT_PATHS[key]).exists()]
 
 
-def run_requires_mcp_output(audit_dir: Path) -> bool:
-    run_config = load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"], [])
+def run_requires_mcp_output(audit_dir: Path, errors: list[str]) -> bool:
+    run_config = load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"], errors)
     return run_config.get("command") == "run" and (audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"]).exists()
 
 
@@ -105,7 +108,7 @@ def validate_mcp_report(path: Path, errors: list[str]) -> None:
 def validate_mcp_artifacts(audit_dir: Path, evidence_index: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     present = artifact_set(audit_dir)
-    if not present and not run_requires_mcp_output(audit_dir):
+    if not present and not run_requires_mcp_output(audit_dir, errors):
         return errors
     if not present and (audit_dir / ARTIFACT_PATHS["MCP_SURFACE"]).exists():
         errors.append("target MCP_SURFACE.json cannot satisfy generated MCP output requirement")

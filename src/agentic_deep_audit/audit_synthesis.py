@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
 from .models import ARTIFACT_PATHS
+
+
+MARKDOWN_INVISIBLE_CHARS = "\u00ad\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060\u2066\u2067\u2068\u2069\ufeff"
+MAX_ARCHITECTURE_BYTES = 2_000_000
+MAX_DECISION_DOC_BYTES = 1_000_000
 
 
 READ_ONLY_HANDOFF_INPUTS = [
@@ -23,8 +28,15 @@ READ_ONLY_HANDOFF_INPUTS = [
 ]
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -57,14 +69,33 @@ def ev(ids: list[str]) -> str:
     return ", ".join(f"`{evidence_id}`" for evidence_id in sorted(set(ids)))
 
 
+def clean_text(value: Any, max_chars: int = 300) -> str:
+    text = str(value or "")
+    text = "".join(char for char in text if char not in MARKDOWN_INVISIBLE_CHARS and not (0xE0000 <= ord(char) <= 0xE007F))
+    text = "".join(char for char in text if char in {"\n", "\t"} or ord(char) >= 32)
+    return text[:max_chars]
+
+
+def markdown_cell(value: Any, max_chars: int = 300) -> str:
+    return re.sub(r"\s+", " ", clean_text(value, max_chars)).strip().replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ")
+
+
 def section_bounds(text: str, heading: str) -> tuple[int, int] | None:
-    start = text.find(heading)
-    if start < 0:
-        return None
-    match = re.search(r"\n## (?!Baseline\b)", text[start + len(heading) :])
-    if match is None:
-        return start, len(text)
-    return start, start + len(heading) + match.start()
+    if len(text.encode("utf-8")) > MAX_ARCHITECTURE_BYTES:
+        text = text.encode("utf-8")[:MAX_ARCHITECTURE_BYTES].decode("utf-8", errors="ignore")
+    offset = 0
+    start: int | None = None
+    content_end: int | None = None
+    for line in text.splitlines(keepends=True):
+        stripped = line.rstrip("\r\n")
+        if start is None and stripped == heading:
+            start = offset
+        elif start is not None and stripped.startswith("## ") and stripped != heading:
+            return start, content_end if content_end is not None else offset
+        elif start is not None and stripped:
+            content_end = offset + len(line)
+        offset += len(line)
+    return (start, len(text)) if start is not None else None
 
 
 def baseline_section(text: str) -> str:
@@ -77,7 +108,7 @@ def baseline_section(text: str) -> str:
 
 def enrich_architecture(audit_dir: Path, module_graph: dict[str, Any], symbol_index: dict[str, Any], surfaces: dict[str, dict[str, Any]]) -> None:
     path = audit_dir / ARTIFACT_PATHS["ARCHITECTURE"]
-    original = path.read_text(encoding="utf-8") if path.exists() else "# Architecture\n\n## Baseline\n\n- No baseline graph data available.\n"
+    original = path.read_text(encoding="utf-8") if path.exists() and path.stat().st_size <= MAX_ARCHITECTURE_BYTES else "# Architecture\n\n## Baseline\n\n- No baseline graph data available.\n"
     baseline_bounds = section_bounds(original, "## Baseline")
     baseline = baseline_section(original) or "## Baseline\n\n- No baseline graph data available.\n"
     module_count = len(module_graph.get("nodes", []))
@@ -132,7 +163,7 @@ def enrich_architecture(audit_dir: Path, module_graph: dict[str, Any], symbol_in
         ]
     prefix = original[: baseline_bounds[0]] if baseline_bounds is not None else "# Architecture\n\n"
     separator = "\n" if baseline.endswith("\n") else "\n\n"
-    path.write_text(prefix + baseline + separator + "\n".join(synthesis), encoding="utf-8")
+    atomic_write_text(path, prefix + baseline + separator + "\n".join(synthesis))
 
 
 def first_evidence(module_graph: dict[str, Any], symbol_index: dict[str, Any], surfaces: dict[str, dict[str, Any]]) -> list[str]:
@@ -156,10 +187,12 @@ def build_feature_catalog(audit_dir: Path, surfaces: dict[str, dict[str, Any]], 
         for record in payload.get("records", []):
             if not isinstance(record, dict):
                 continue
-            label = record.get("path") or record.get("name") or record.get("command") or record.get("kind")
+            label = markdown_cell(record.get("path") or record.get("name") or record.get("command") or record.get("kind"))
+            source = markdown_cell(f"{artifact_key}:{record.get('source_path')}")
+            status = markdown_cell(record.get("status"))
             if has_reachable_evidence(record, available):
                 count += 1
-                lines.append(f"| {label} | {artifact_key}:{record.get('source_path')} | {record.get('status')} | {ev(record['evidence_ids'])} |")
+                lines.append(f"| {label} | {source} | {status} | {ev(record['evidence_ids'])} |")
             else:
                 open_questions.append(f"- Surface `{artifact_key}:{record.get('surface_id')}` lacks reachable evidence and was not promoted to feature.")
     for symbol in symbol_index.get("symbols", []):
@@ -167,7 +200,8 @@ def build_feature_catalog(audit_dir: Path, surfaces: dict[str, dict[str, Any]], 
             continue
         if symbol.get("public") is True and has_reachable_evidence(symbol, available):
             count += 1
-            lines.append(f"| {symbol.get('name')} | SYMBOL_INDEX:{symbol.get('path')} | observed | {ev(symbol['evidence_ids'])} |")
+            source = markdown_cell(f"SYMBOL_INDEX:{symbol.get('path')}")
+            lines.append(f"| {markdown_cell(symbol.get('name'))} | {source} | observed | {ev(symbol['evidence_ids'])} |")
         elif symbol.get("public") is True:
             open_questions.append(f"- Public symbol `{symbol.get('name')}` lacks reachable evidence.")
     for doc in file_index.get("root_documents", []):
@@ -176,13 +210,14 @@ def build_feature_catalog(audit_dir: Path, surfaces: dict[str, dict[str, Any]], 
         evidence_id = evidence_lookup.get(str(doc["path"]))
         if evidence_id in available:
             count += 1
-            lines.append(f"| Root document {doc.get('name')} | FILE_INDEX.root_documents:{doc['path']} | observed | {ev([evidence_id])} |")
+            source = markdown_cell(f"FILE_INDEX.root_documents:{doc['path']}")
+            lines.append(f"| Root document {markdown_cell(doc.get('name'))} | {source} | observed | {ev([evidence_id])} |")
         else:
             open_questions.append(f"- Root document `{doc.get('path')}` lacks reachable evidence and was not promoted to feature.")
     if count == 0:
         lines.append("|  | skipped | skipped |  |")
         open_questions.append("- No evidence-backed features were found.")
-    (audit_dir / ARTIFACT_PATHS["FEATURE_CATALOG"]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(audit_dir / ARTIFACT_PATHS["FEATURE_CATALOG"], "\n".join(lines) + "\n")
     return open_questions
 
 
@@ -194,11 +229,11 @@ def build_patterns(audit_dir: Path, module_graph: dict[str, Any], surfaces: dict
         rows.append(f"| Dependency-oriented module split | MODULE_GRAPH imports edges | medium | map reusable module boundaries | {ev(evidence)} |")
     for record in (surfaces.get("API_SURFACE") or {}).get("records", []):
         if isinstance(record, dict) and has_reachable_evidence(record, available):
-            rows.append(f"| Public API endpoint | {record.get('source_path')} | {record.get('confidence')} | integration surface | {ev(record['evidence_ids'])} |")
+            rows.append(f"| Public API endpoint | {markdown_cell(record.get('source_path'))} | {markdown_cell(record.get('confidence'))} | integration surface | {ev(record['evidence_ids'])} |")
             break
     if len(rows) == 4:
         rows.append("| skipped | no evidence-backed pattern | low | none |  |")
-    (audit_dir / ARTIFACT_PATHS["PATTERNS"]).write_text("\n".join(rows) + "\n", encoding="utf-8")
+    atomic_write_text(audit_dir / ARTIFACT_PATHS["PATTERNS"], "\n".join(rows) + "\n")
 
 
 def license_status_source(audit_dir: Path, available: set[str]) -> str:
@@ -224,8 +259,8 @@ def build_special_implementations(audit_dir: Path, symbol_index: dict[str, Any],
             continue
         if not has_reachable_evidence(symbol, available):
             continue
-        name = str(symbol.get("name"))
-        path = str(symbol.get("path"))
+        name = clean_text(symbol.get("name"))
+        path = clean_text(symbol.get("path"))
         candidates.append(
             {
                 "candidate_id": f"reuse-{len(candidates) + 1:06d}",
@@ -233,7 +268,7 @@ def build_special_implementations(audit_dir: Path, symbol_index: dict[str, Any],
                 "kind": "reusable_component",
                 "files": [path],
                 "coupling": "medium" if dependencies_by_file.get(path) else "low",
-                "dependencies": sorted(dependencies_by_file.get(path, set())),
+                "dependencies": [clean_text(item) for item in sorted(dependencies_by_file.get(path, set()))],
                 "license_status_source": license_source,
                 "performance_note": "No benchmark evidence collected in phase 5; performance review is deferred to phase 20.",
                 "limitations": ["static synthesis only", "requires human review before reuse"],
@@ -245,9 +280,30 @@ def build_special_implementations(audit_dir: Path, symbol_index: dict[str, Any],
     write_json(audit_dir / ARTIFACT_PATHS["SPECIAL_IMPLEMENTATIONS"], {"schema_version": "1.0", "run_id": load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).get("run_id"), "candidates": candidates, "skipped": not candidates, "skip_reason": None if candidates else "no evidence-backed reusable component candidates"})
 
 
+def resolve_repo_relative_file(repo_path: Path, path_value: str) -> Path | None:
+    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
+        return None
+    posix = PurePosixPath(path_value)
+    windows = PureWindowsPath(path_value)
+    if posix.is_absolute() or windows.is_absolute() or windows.drive or windows.root:
+        return None
+    if ".." in posix.parts or ".." in windows.parts:
+        return None
+    root = repo_path.resolve()
+    candidate = (root / path_value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
 def changelog_has_decision_marker(repo_path: Path, path_value: str) -> bool:
     try:
-        text = (repo_path / path_value).read_text(encoding="utf-8", errors="replace")
+        source = resolve_repo_relative_file(repo_path, path_value)
+        if source is None or source.stat().st_size > MAX_DECISION_DOC_BYTES:
+            return False
+        text = source.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
     return bool(re.search(r"\b(adr|architecture decision|decision|decided|rationale)\b", text, flags=re.IGNORECASE))
@@ -256,7 +312,11 @@ def changelog_has_decision_marker(repo_path: Path, path_value: str) -> bool:
 def decision_doc_questions(audit_dir: Path) -> list[str]:
     file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"])
     repo_path = Path(str((file_index.get("repo") or {}).get("path") or "."))
-    records = [str(record.get("path_normalized") or record.get("path") or "") for record in file_index.get("records", []) if isinstance(record, dict)]
+    records = [
+        str(record.get("path_normalized") or record.get("path") or "")
+        for record in file_index.get("records", [])
+        if isinstance(record, dict) and resolve_repo_relative_file(repo_path, str(record.get("path_normalized") or record.get("path") or "")) is not None
+    ]
     decision_paths = [
         path
         for path in records
@@ -278,7 +338,7 @@ def write_open_questions(audit_dir: Path, questions: list[str]) -> None:
     else:
         lines.append("- No synthesis open questions.")
     lines.append("")
-    (audit_dir / ARTIFACT_PATHS["OPEN_QUESTIONS"]).write_text("\n".join(lines), encoding="utf-8")
+    atomic_write_text(audit_dir / ARTIFACT_PATHS["OPEN_QUESTIONS"], "\n".join(lines))
 
 
 def run_synthesis(run_config: dict[str, Any], audit_dir: Path) -> None:

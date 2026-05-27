@@ -28,6 +28,7 @@ def load_json(path: Path) -> dict:
 
 def config_for(repo: Path, output: Path) -> dict:
     return {
+        "schema_version": "1.0",
         "run_id": "run-graph",
         "repo": {"kind": "local", "path": str(repo), "github": None},
         "profile": "minimal",

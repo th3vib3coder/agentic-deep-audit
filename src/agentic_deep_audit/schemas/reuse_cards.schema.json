@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reuse Cards",
+  "type": "object",
+  "required": ["schema_version", "target_context", "scoring_input_sources", "cards"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "target_context": {"type": "object"},
+    "scoring_input_sources": {"type": "object"},
+    "cards": {"type": "array", "items": {"type": "object", "required": ["reuse_id", "candidate_id", "name", "problem_solved", "files", "license_status", "target_context", "recommendation", "decision", "requires_human_decision", "legal_caveat", "security_caveat", "performance_caveat", "score_inputs", "evidence_ids"], "properties": {"reuse_id": {"type": "string"}, "candidate_id": {"type": "string"}, "name": {"type": "string"}, "problem_solved": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}}, "dependencies": {"type": "array", "items": {"type": "string"}}, "license_status": {"type": "string"}, "target_context": {"type": "object"}, "coupling": {"enum": ["low", "medium", "high", "unknown"]}, "porting_effort": {"enum": ["low", "medium", "high", "unknown"]}, "recommendation": {"enum": ["adopt", "adapt", "study", "avoid"]}, "decision": {"enum": ["adopt", "adapt", "study", "avoid"]}, "requires_human_decision": {"type": "boolean"}, "legal_caveat": {"type": "string"}, "security_caveat": {"type": "string"}, "performance_caveat": {"type": "string"}, "score_inputs": {"type": "object"}, "evidence_ids": {"type": "array", "items": {"type": "string"}}}}},
+    "skipped_candidates": {"type": "array", "items": {"type": "object"}}
+  }
+}

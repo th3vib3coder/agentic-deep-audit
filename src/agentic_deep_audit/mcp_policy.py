@@ -23,6 +23,8 @@ def _high_entropy(value: str) -> bool:
 
 
 def looks_secret(value: str) -> bool:
+    if re.fullmatch(r"run-\d{8}T\d{6}Z", value):
+        return False
     if any(pattern.search(value) for pattern in SECRET_PATTERNS):
         return True
     parsed = urlparse(value)

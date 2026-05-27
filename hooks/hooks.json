@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|Shell|Exec|Edit|Write|Task|TaskCreate|MultiEdit|NotebookEdit|mcp__[^\\s]+__[^\\s]+)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if defined AGENTIC_DEEP_AUDIT_PYTHON (set AGENTIC_DEEP_AUDIT_HOOK_STRICT=1 & \"%AGENTIC_DEEP_AUDIT_PYTHON%\" \"%CLAUDE_PLUGIN_ROOT%\\hooks\\pre_tool_policy.py\") else (echo hook_misconfigured: AGENTIC_DEEP_AUDIT_PYTHON is required 1>&2 & exit /b 2)"
+          }
+        ]
+      }
+    ]
+  }
+}

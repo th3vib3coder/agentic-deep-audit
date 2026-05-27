@@ -59,18 +59,10 @@ def test_audit_contract_has_each_phase_once() -> None:
     assert phases == [str(number) for number in range(10)]
 
 
-def test_output_reference_covers_runtime_artifacts() -> None:
+def test_output_reference_covers_artifact_constants() -> None:
     output_reference = read(REFERENCES / "output_artifacts.md")
-    required = [
-        ARTIFACT_PATHS["RUN_CONFIG"],
-        ARTIFACT_PATHS["EVIDENCE_INDEX"],
-        ARTIFACT_PATHS["GRAPH"],
-        ARTIFACT_PATHS["CORPUS_INDEX"],
-        ARTIFACT_PATHS["REPORT"],
-        ARTIFACT_PATHS["ADVERSARIAL_REVIEW_PACKET"],
-    ]
 
-    missing = sorted(artifact for artifact in required if f"`{artifact}`" not in output_reference)
+    missing = sorted(artifact for artifact in ARTIFACT_PATHS.values() if f"`{artifact}`" not in output_reference)
     assert not missing
 
 

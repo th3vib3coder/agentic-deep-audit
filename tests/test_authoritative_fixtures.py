@@ -57,10 +57,10 @@ def test_all_authoritative_fixtures_exist_and_have_coverage() -> None:
 
 
 def test_ci_workflow_runs_required_gates() -> None:
-    workflow = PLUGIN_ROOT / ".github" / "workflows" / "agentic-deep-audit.yml"
+    workflow = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "agentic-deep-audit.yml"
     text = workflow.read_text(encoding="utf-8")
 
-    for expected in ["pytest tests -q", "tests/run_smoke_tests.py"]:
+    for expected in ["pytest tests -q", "tests/run_smoke_tests.py", "compileall"]:
         assert expected in text
 
 

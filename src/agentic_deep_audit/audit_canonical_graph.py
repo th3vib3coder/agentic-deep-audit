@@ -40,6 +40,31 @@ def evidence_from_text(text: str) -> list[str]:
     return sorted(set(EVIDENCE_RE.findall(text)))
 
 
+def split_markdown_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return []
+    body = stripped.strip("|")
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in body:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "|":
+            cells.append("".join(current).strip(" `"))
+            current = []
+            continue
+        current.append(char)
+    cells.append("".join(current).strip(" `"))
+    return cells
+
+
 def evidence_by_path(evidence_index: dict[str, Any]) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     for item in evidence_index.get("evidence", []):
@@ -184,7 +209,7 @@ def markdown_table_rows(path: Path) -> list[tuple[str, list[str]]]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.startswith("|"):
             continue
-        cells = [cell.strip(" `") for cell in line.strip().strip("|").split("|")]
+        cells = split_markdown_row(line)
         if not cells or all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells):
             continue
         if not header_consumed:

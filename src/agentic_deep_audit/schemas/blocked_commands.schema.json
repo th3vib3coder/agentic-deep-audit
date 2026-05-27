@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Blocked Commands Policy",
+  "type": "object",
+  "required": ["schema_version", "allowed", "blocked_always", "sandbox_only"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "allowed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "subcommands", "network"],
+        "additionalProperties": false,
+        "properties": {
+          "command": {"type": "string"},
+          "subcommands": {"type": "array", "items": {"type": "string"}},
+          "network": {"type": "boolean"}
+        }
+      }
+    },
+    "blocked_always": {"type": "array", "items": {"type": "string"}},
+    "sandbox_only": {"type": "array", "items": {"type": "string"}}
+  }
+}

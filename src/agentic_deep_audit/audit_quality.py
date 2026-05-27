@@ -6,6 +6,7 @@ import ast
 import json
 import platform
 import re
+import tokenize
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from .sanitize import sanitize_markdown
 BENCHMARK_NAMES = {"bench", "benchmark", "benchmarks", "perf", "performance"}
 LINT_CONFIG_NAMES = {".flake8", ".ruff.toml", "ruff.toml", ".eslintrc", ".eslintrc.json", "mypy.ini", "pylintrc", ".pylintrc"}
 PHASE_NAMES = ["bootstrap", "inventory", "provenance", "manifest", "graph", "surface", "synthesis", "scientific", "telemetry", "risk_security", "license_binary", "performance_quality"]
+MAX_SOURCE_PARSE_BYTES = 1_000_000
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -58,9 +60,33 @@ def top_hot_modules(file_index: dict[str, Any], module_graph: dict[str, Any], li
     return sorted(rows, key=lambda item: (int(item["rank"]) or 10**9, -int(item["size_bytes"]), str(item["module"])))[:limit]
 
 
+def safe_repo_file(repo_path: Path, path_value: str) -> Path | None:
+    root = repo_path.resolve()
+    candidate = (root / path_value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if candidate.is_symlink() or not candidate.is_file():
+        return None
+    return candidate
+
+
+def read_text_limited(path: Path, max_bytes: int = MAX_SOURCE_PARSE_BYTES) -> str | None:
+    try:
+        if path.stat().st_size > max_bytes:
+            return None
+        with tokenize.open(path) as handle:
+            return handle.read(max_bytes + 1)
+    except (OSError, SyntaxError, UnicodeError):
+        return None
+
+
 def python_function_spans(path: Path) -> list[dict[str, Any]]:
     try:
-        data = path.read_text(encoding="utf-8", errors="replace")
+        data = read_text_limited(path)
+        if data is None:
+            return []
         tree = ast.parse(data)
     except (OSError, SyntaxError):
         return []
@@ -84,14 +110,14 @@ def static_signals(repo_path: Path, file_index: dict[str, Any], evidence_lookup:
         kind = str(record.get("kind") or "")
         if kind == "code" and int(record.get("size_bytes") or 0) >= 2048:
             large_files.append({"path": path_value, "size_bytes": int(record.get("size_bytes") or 0), "evidence_ids": [evidence_lookup.get(path_value)] if evidence_lookup.get(path_value) else []})
-        source = repo_path / path_value
-        if source.suffix.lower() == ".py":
+        source = safe_repo_file(repo_path, path_value)
+        if source is not None and source.suffix.lower() == ".py":
             for function in python_function_spans(source):
                 if int(function["line_count"]) >= 20:
                     large_functions.append({**function, "path": path_value, "evidence_ids": [evidence_lookup.get(path_value)] if evidence_lookup.get(path_value) else []})
-        if kind != "code" or not source.exists():
+        if kind != "code" or source is None:
             continue
-        text = source.read_text(encoding="utf-8", errors="replace")
+        text = read_text_limited(source) or ""
         patterns = {
             "io": r"\b(open|read_text|write_text|read_bytes|write_bytes)\s*\(",
             "network": r"\b(requests\.|httpx\.|fetch\s*\(|urllib\.request|axios\.)",
@@ -122,10 +148,10 @@ def performance_claims(repo_path: Path, file_index: dict[str, Any], evidence_loo
         if not isinstance(record, dict) or record.get("kind") != "docs":
             continue
         path_value = record_path(record)
-        source = repo_path / path_value
-        if not source.exists():
+        source = safe_repo_file(repo_path, path_value)
+        if source is None:
             continue
-        for line_number, line in enumerate(source.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+        for line_number, line in enumerate((read_text_limited(source) or "").splitlines(), start=1):
             if pattern.search(line):
                 sanitized = sanitize_markdown(path_value, line, evidence_id=evidence_lookup.get(path_value))
                 rows.append({"path": path_value, "line": line_number, "claim": markdown_cell(sanitized.sanitized_text)[:220], "sanitizer_decision": sanitized.decision, "status": "claim-only", "evidence_ids": [evidence_lookup.get(path_value)] if evidence_lookup.get(path_value) else []})
@@ -138,12 +164,29 @@ def test_coverage_signal(file_index: dict[str, Any], build_test_map: str, ci_map
     ci_commands = [command for row in ci_map.get("records", []) if isinstance(row, dict) for command in row.get("commands", []) if isinstance(command, dict)]
     numeric: list[dict[str, Any]] = []
     for path_value in coverage_files:
-        source = repo_path / path_value
-        if source.name.lower() == "coverage.xml" and source.exists():
-            match = re.search(r'line-rate="([0-9.]+)"', source.read_text(encoding="utf-8", errors="replace"))
+        source = safe_repo_file(repo_path, path_value)
+        if source is not None and source.name.lower() == "coverage.xml":
+            match = re.search(r'line-rate="([0-9.]+)"', read_text_limited(source) or "")
             if match:
-                numeric.append({"path": path_value, "coverage_percent": round(float(match.group(1)) * 100, 2), "evidence_ids": [evidence_lookup.get(path_value)] if evidence_lookup.get(path_value) else []})
-    return {"test_files": test_files, "coverage_files": coverage_files, "ci_test_command_count": build_test_map.lower().count(" test") + build_test_map.lower().count("pytest"), "ci_commands": len(ci_commands), "numeric_coverage": numeric}
+                rate = float(match.group(1))
+                if 0.0 <= rate <= 1.0:
+                    numeric.append({"path": path_value, "coverage_percent": round(rate * 100, 2), "evidence_ids": [evidence_lookup.get(path_value)] if evidence_lookup.get(path_value) else []})
+    test_signal_re = re.compile(r"(?:^|[\s`|])(?:pytest|tox|nox|npm\s+test|yarn\s+test|pnpm\s+test|go\s+test|cargo\s+test|mvn\s+test|gradle\s+test)(?:$|[\s`|])", re.IGNORECASE)
+    ci_test_command_count = sum(1 for line in build_test_map.splitlines() if test_signal_re.search(line))
+    return {"test_files": test_files, "coverage_files": coverage_files, "ci_test_command_count": ci_test_command_count, "ci_commands": len(ci_commands), "numeric_coverage": numeric}
+
+
+def iter_audit_regular_files(audit_dir: Path):
+    root = audit_dir.resolve()
+    for path in audit_dir.rglob("*"):
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if path.is_symlink() or not path.is_file():
+            continue
+        yield path
 
 
 def audit_runtime_metrics(run_config: dict[str, Any], audit_dir: Path, file_index: dict[str, Any], started_at: float) -> dict[str, Any]:
@@ -156,7 +199,7 @@ def audit_runtime_metrics(run_config: dict[str, Any], audit_dir: Path, file_inde
         else:
             phase_entries[phase] = {"skipped_reason": "phase duration not instrumented for this command"}
     records = [record for record in file_index.get("records", []) if isinstance(record, dict)]
-    output_bytes = sum(path.stat().st_size for path in audit_dir.rglob("*") if path.is_file())
+    output_bytes = sum(path.stat().st_size for path in iter_audit_regular_files(audit_dir))
     tool_status = load_json(audit_dir / ARTIFACT_PATHS["TOOL_STATUS"])
     tool_failures = sum(1 for tool in tool_status.get("tools", []) if isinstance(tool, dict) and tool.get("status") in {"failed", "blocked", "degraded"})
     memory_peak = {"status": "skipped", "skipped_reason": f"peak memory measurement unsupported by deterministic portable path on {platform.system() or 'unknown'}"}
@@ -200,9 +243,11 @@ def quality_markdown(file_index: dict[str, Any], ci_map: dict[str, Any], telemet
     records = [record for record in file_index.get("records", []) if isinstance(record, dict)]
     docs = sum(1 for record in records if record.get("kind") == "docs")
     lint_configs = [record_path(record) for record in records if Path(record_path(record)).name.lower() in LINT_CONFIG_NAMES]
-    risk_count = len(risk.get("findings", [])) if isinstance(risk.get("findings"), list) else 0
+    risk_findings = risk.get("findings") if isinstance(risk.get("findings"), list) else []
+    risk_reviewed = isinstance(risk.get("findings"), list)
+    risk_count = sum(1 for item in risk_findings if isinstance(item, dict) and item.get("status") == "observed")
     observed_telemetry = sum(1 for record in telemetry.get("records", []) if isinstance(record, dict) and record.get("status") == "observed")
-    score_parts = [bool(coverage["test_files"]), bool(coverage["ci_commands"]), bool(lint_configs), docs > 0, risk_count == 0]
+    score_parts = [bool(coverage["test_files"]), bool(coverage["ci_commands"]), bool(lint_configs), docs > 0, risk_reviewed and risk_count == 0]
     score = sum(1 for item in score_parts if item)
     return "\n".join([
         "# Quality Review",

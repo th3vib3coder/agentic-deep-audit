@@ -118,6 +118,24 @@ def persist_raw_output(audit_dir: Path, tool: str, filename: str, data: str | by
     return destination, str(destination.relative_to(audit_dir).as_posix())
 
 
+def adapter_subprocess_env() -> dict[str, str]:
+    keep = {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TMP", "TEMP"}
+    env = {key: value for key, value in os.environ.items() if key.upper() in keep}
+    env.update(
+        {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PAGER": "cat",
+            "GIT_EXTERNAL_DIFF": "",
+            "HOME": "",
+        }
+    )
+    return env
+
+
 def run_adapter_command(
     adapter: ToolAdapter,
     command: list[str],
@@ -163,7 +181,7 @@ def run_adapter_command(
         return status
     start = time.monotonic()
     try:
-        completed = subprocess.run(command, cwd=safe_cwd, text=True, capture_output=True, check=False, timeout=timeout_seconds)
+        completed = subprocess.run(command, cwd=safe_cwd, env=adapter_subprocess_env(), text=True, capture_output=True, check=False, timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         status = AdapterStatus(
             tool=adapter.adapter_id,

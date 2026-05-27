@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import math
 import os
 import re
 import shutil
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
@@ -44,6 +45,8 @@ WIKI_SOURCE_KEYS = [
     "OPEN_QUESTIONS",
 ]
 DECISION_MARKER = re.compile(r"\b(adr|architecture decision|decision|decided|rationale)\b", re.IGNORECASE)
+MARKDOWN_INVISIBLE_CHARS = "\u00ad\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060\u2066\u2067\u2068\u2069\ufeff"
+MAX_DECISION_DOC_BYTES = 1_000_000
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -67,9 +70,49 @@ def evidence_by_path(audit_dir: Path) -> dict[str, list[str]]:
 
 
 def stable_slug(value: str) -> str:
-    base = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-") or "item"
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+    normalized = value.replace("\\", "/").casefold()
+    base = re.sub(r"[^a-z0-9]+", "-", normalized).strip("-") or "item"
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
     return f"{base[:72]}-{digest}"
+
+
+def markdown_text(value: Any) -> str:
+    text = str(value)
+    text = "".join(char for char in text if char not in MARKDOWN_INVISIBLE_CHARS and not (0xE0000 <= ord(char) <= 0xE007F))
+    text = "".join(char for char in text if char in {"\n", "\t"} or ord(char) >= 32)
+    return html.escape(text, quote=False).replace("|", "\\|")
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def split_markdown_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return []
+    body = stripped.strip("|")
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in body:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "|":
+            cells.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    cells.append("".join(current).strip())
+    return cells
 
 
 def evidence_text(evidence_ids: list[str]) -> str:
@@ -112,9 +155,9 @@ def frontmatter(
     return "\n".join(
         [
             "---",
-            f"title: {json.dumps(title)}",
+            f"title: {json.dumps(markdown_text(title))}",
             f"type: {json.dumps(page_type)}",
-            f"repo: {json.dumps(repo_label(run_config))}",
+            f"repo: {json.dumps(markdown_text(repo_label(run_config)))}",
             f"commit: {json.dumps(provenance_commit(audit_dir))}",
             f"slug: {json.dumps(slug)}",
             f"tags: {json.dumps(sorted(set(['agentic-deep-audit', *tags])))}",
@@ -148,11 +191,11 @@ def write_page(
     effective_status = status or ("observed" if evidence_ids else "skipped")
     lines = [
         frontmatter(audit_dir, title, page_type, slug, tags, source_artifacts, evidence_ids, effective_status, run_config),
-        f"# {title}",
+        f"# {markdown_text(title)}",
         "",
         "## Purpose",
         "",
-        purpose,
+        markdown_text(purpose),
         "",
         "## Key Evidence",
         "",
@@ -167,12 +210,12 @@ def write_page(
             lines.append(f"- {source_link(audit_dir, path, artifact)}")
         else:
             lines.append(f"- skipped: `{artifact}` is not present.")
-    lines.extend(["", "## Details", "", *details, "", "## Open Questions", ""])
+    lines.extend(["", "## Details", "", *(markdown_text(detail) for detail in details), "", "## Open Questions", ""])
     questions = open_questions if open_questions is not None else []
-    lines.extend(questions or ["- No page-specific open questions."])
+    lines.extend((markdown_text(question) for question in questions) if questions else ["- No page-specific open questions."])
     lines.extend(["", "## Backlinks", ""])
     lines.extend(f"- [[{link}]]" for link in sorted(set(backlinks or ["000_home"])))
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    atomic_write_text(path, "\n".join(lines).rstrip() + "\n")
 
 
 def first_evidence_from(*payloads: dict[str, Any]) -> list[str]:
@@ -360,7 +403,7 @@ def table_rows(path: Path) -> list[list[str]]:
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.startswith("|") or "---" in line:
             continue
-        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        cells = split_markdown_row(line)
         if cells and cells[0].lower() not in {"feature", "pattern", ""}:
             rows.append(cells)
     return rows
@@ -387,6 +430,24 @@ def list_records(payload: dict[str, Any], keys: list[str]) -> list[dict[str, Any
     return []
 
 
+def resolve_repo_relative_file(repo_path: Path, path_value: str) -> Path | None:
+    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
+        return None
+    posix = PurePosixPath(path_value)
+    windows = PureWindowsPath(path_value)
+    if posix.is_absolute() or windows.is_absolute() or windows.drive or windows.root:
+        return None
+    if ".." in posix.parts or ".." in windows.parts:
+        return None
+    root = repo_path.resolve()
+    candidate = (root / path_value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
 def write_json_category(audit_dir: Path, run_config: dict[str, Any], artifact_key: str, folder: str, title: str, page_type: str, keys: list[str]) -> None:
     payload = load_json(audit_dir / ARTIFACT_PATHS[artifact_key])
     records = list_records(payload, keys)
@@ -410,12 +471,14 @@ def decision_paths(audit_dir: Path) -> list[tuple[str, list[str]]]:
         if not isinstance(record, dict):
             continue
         path_value = str(record.get("path_normalized") or record.get("path") or "")
+        marker_path = resolve_repo_relative_file(repo_path, path_value)
+        if marker_path is None:
+            continue
         name = Path(path_value).name.lower()
-        marker_path = repo_path / path_value
         marker = False
         if path_value.lower().startswith("docs/decisions/") or "adr" in name or "decision" in name or name == "architecture.md":
             marker = True
-        elif name == "changelog.md" and marker_path.exists():
+        elif name == "changelog.md" and marker_path.stat().st_size <= MAX_DECISION_DOC_BYTES:
             marker = bool(DECISION_MARKER.search(marker_path.read_text(encoding="utf-8", errors="replace")))
         if marker:
             results.append((path_value, evidence.get(path_value, [])))
@@ -436,7 +499,16 @@ def write_decision_pages(audit_dir: Path, run_config: dict[str, Any]) -> None:
 def run_wiki(run_config: dict[str, Any], audit_dir: Path) -> None:
     wiki_dir = audit_dir / "wiki"
     if wiki_dir.exists():
-        shutil.rmtree(wiki_dir)
+        root = audit_dir.resolve()
+        resolved = wiki_dir.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"refusing to remove wiki path outside audit dir: {resolved}") from exc
+        if wiki_dir.is_symlink():
+            wiki_dir.unlink()
+        else:
+            shutil.rmtree(wiki_dir)
     write_root_pages(audit_dir, run_config)
     write_module_pages(audit_dir, run_config)
     write_table_category(audit_dir, run_config, "FEATURE_CATALOG", "features", "Feature Pages", "feature")

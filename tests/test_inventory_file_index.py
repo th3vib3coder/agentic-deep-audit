@@ -173,6 +173,20 @@ def test_inventory_validation_rejects_hash_mismatch_and_orphan(tmp_path: Path) -
     assert any("indexed file missing" in error for error in validation.errors)
 
 
+def test_inventory_validation_rejects_path_traversal(tmp_path: Path) -> None:
+    _, audit_dir = run_inventory_fixture(tmp_path)
+    file_index_path = audit_dir / ARTIFACT_PATHS["FILE_INDEX"]
+    payload = json.loads(file_index_path.read_text(encoding="utf-8"))
+    payload["records"][0]["path"] = "../outside.txt"
+    payload["records"][0]["path_normalized"] = "../outside.txt"
+    file_index_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    validation = validate_inventory_artifacts(audit_dir)
+
+    assert not validation.ok
+    assert any("unsafe source path" in error for error in validation.errors)
+
+
 def test_inventory_excludes_absolute_nested_output_dir(tmp_path: Path) -> None:
     repo = prepare_fixture(tmp_path)
     output_dir = repo / "reports" / "audit"

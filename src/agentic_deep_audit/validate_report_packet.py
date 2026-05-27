@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -55,13 +56,22 @@ def validate_review_ledger(audit_dir: Path, errors: list[str]) -> None:
         if len(cells) < 4:
             continue
         _artifact, author, reviewer, decision = cells[:4]
-        if re.search(r"\bACCEPT\b", decision, flags=re.IGNORECASE) and author == reviewer:
+        if re.search(r"\bACCEPT(?:ED)?\b", decision, flags=re.IGNORECASE) and author.casefold() == reviewer.casefold():
             errors.append(f"REVIEW_LEDGER.md self-acceptance row: {author}")
 
 
 def validate_review_packet(audit_dir: Path, errors: list[str]) -> None:
     path = audit_dir / ARTIFACT_PATHS["ADVERSARIAL_REVIEW_PACKET"]
     if not path.exists():
+        run_config_path = audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]
+        if run_config_path.exists():
+            try:
+                run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                errors.append(f"RUN_CONFIG.json invalid while checking review readiness: {exc}")
+                return
+            if isinstance(run_config, dict) and run_config.get("ready_for_review") is True:
+                errors.append("ADVERSARIAL_REVIEW_PACKET.md missing while RUN_CONFIG.json ready_for_review is true")
         return
     if not validation_passed(audit_dir):
         errors.append("ADVERSARIAL_REVIEW_PACKET.md exists before zero-blocker validation")

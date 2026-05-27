@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .audit_provenance import run_git_command
 from .models import ARTIFACT_PATHS
@@ -66,6 +67,8 @@ CODE_SUFFIXES = {
     ".R",
 }
 VENDORED_PARTS = {"node_modules", "vendor", "third_party", "dist", "build", ".venv", "venv"}
+GITHUB_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+IDENTITY_SALT = "agentic-deep-audit-telemetry-v1"
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -132,6 +135,11 @@ def normalize_identity(name: str, email: str, mailmap: dict[str, str]) -> str:
         lowered = email.lower()
         return mailmap.get(lowered, lowered)
     return re.sub(r"\s+", " ", name.strip().lower())
+
+
+def pseudonymize_identity(identity: str, salt: str = IDENTITY_SALT) -> str:
+    digest = hashlib.sha256((salt + identity.casefold()).encode("utf-8")).hexdigest()[:12]
+    return f"id_{digest}"
 
 
 def telemetry_record(index: int, category: str, status: str, parameters: dict[str, Any], value: dict[str, Any] | None, evidence_ids: list[str], source: str, confidence: str, limitations: list[str]) -> dict[str, Any]:
@@ -257,7 +265,7 @@ def contributor_records(commits: list[dict[str, Any]], repo_path: Path) -> tuple
     for commit in commits:
         if is_bot_author(str(commit["author_name"]), str(commit["author_email"])):
             continue
-        identity = normalize_identity(str(commit["author_name"]), str(commit["author_email"]), mailmap)
+        identity = pseudonymize_identity(normalize_identity(str(commit["author_name"]), str(commit["author_email"]), mailmap))
         author_counts[identity] += 1
         for path in commit.get("files", []):
             path_text = str(path)
@@ -414,7 +422,19 @@ def api_doc_record(index: int, file_index: dict[str, Any], evidence_lookup: dict
     return telemetry_record(index, "api_doc_extraction", "skipped", parameters, None, [], "file_index", "low", ["no API documentation signal found"])
 
 
+def validate_github_target(target: str) -> str:
+    if not GITHUB_TARGET_PATTERN.fullmatch(target) or ".." in target:
+        raise ValueError("GitHub target must be owner/repo without traversal")
+    return target
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req: Request, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        raise HTTPError(req.full_url, code, "redirect blocked", headers, fp)
+
+
 def fetch_github_repo_signals(target: str) -> dict[str, Any]:
+    target = validate_github_target(target)
     base = f"https://api.github.com/repos/{target}"
     endpoints = {
         "repo": base,
@@ -423,9 +443,10 @@ def fetch_github_repo_signals(target: str) -> dict[str, Any]:
         "pulls_sample": f"{base}/pulls?state=all&per_page=10",
     }
     responses: dict[str, Any] = {}
+    opener = build_opener(NoRedirectHandler)
     for key, url in endpoints.items():
         request = Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "agentic-deep-audit"})
-        with urlopen(request, timeout=5) as response:  # noqa: S310 - guarded by explicit network policy.
+        with opener.open(request, timeout=5) as response:  # noqa: S310 - guarded by explicit network policy.
             responses[key] = json.loads(response.read().decode("utf-8"))
     repo = responses.get("repo") if isinstance(responses.get("repo"), dict) else {}
     releases = responses.get("releases") if isinstance(responses.get("releases"), list) else []
@@ -456,8 +477,12 @@ def issue_pr_record(index: int, audit_dir: Path, parameters: dict[str, Any], pro
     if not isinstance(target, str) or "/" not in target:
         return telemetry_record(index, "issue_pr_signals", "skipped", parameters, None, [], "github_metadata", "low", ["GitHub target unavailable"])
     try:
+        target = validate_github_target(target)
+    except ValueError:
+        return telemetry_record(index, "issue_pr_signals", "skipped", parameters, None, [], "github_metadata", "low", ["GitHub target invalid"])
+    try:
         value = fetcher(target)
-    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         return telemetry_record(index, "issue_pr_signals", "skipped", parameters, None, [], "github_metadata", "low", [f"GitHub metadata request failed: {type(exc).__name__}"])
     return telemetry_record(index, "issue_pr_signals", "observed", parameters, value, [], "github_api", "medium", ["network metadata fetched only after explicit policy allow"])
 

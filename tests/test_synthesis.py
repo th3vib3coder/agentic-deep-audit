@@ -30,6 +30,7 @@ def copy_fixture(name: str, tmp_path: Path) -> Path:
 
 def config_for(repo: Path, output: Path) -> dict:
     return {
+        "schema_version": "1.0",
         "run_id": "run-synthesis",
         "repo": {"kind": "local", "path": str(repo), "github": None},
         "profile": "minimal",
@@ -106,6 +107,23 @@ def test_feature_without_evidence_moves_to_open_questions(tmp_path: Path) -> Non
 
     open_questions = (audit_dir / ARTIFACT_PATHS["OPEN_QUESTIONS"]).read_text(encoding="utf-8")
     assert "lacks reachable evidence" in open_questions
+
+
+def test_synthesis_escapes_markdown_table_cells_before_graph_promotion(tmp_path: Path) -> None:
+    repo = copy_fixture("surface_basic", tmp_path)
+    audit_dir, run_config = build_surface(repo, repo / "audit-table-escape")
+    api_path = audit_dir / ARTIFACT_PATHS["API_SURFACE"]
+    api = load_json(api_path)
+    api["records"][0]["path"] = "evil | injected"
+    api["records"][0]["source_path"] = "src/app.py | phantom"
+    api_path.write_text(json.dumps(api, indent=2) + "\n", encoding="utf-8")
+
+    run_synthesis(run_config, audit_dir)
+
+    feature_text = (audit_dir / ARTIFACT_PATHS["FEATURE_CATALOG"]).read_text(encoding="utf-8")
+    assert "evil \\| injected" in feature_text
+    assert "src/app.py \\| phantom" in feature_text
+    assert "src/app.py | phantom" not in feature_text
 
 
 def test_synthesis_validation_rejects_broken_markdown_and_json_evidence(tmp_path: Path) -> None:
@@ -191,6 +209,40 @@ def test_decision_doc_scan_requires_changelog_decision_marker(tmp_path: Path) ->
 
     assert skipped
     assert decision_doc_questions(audit_dir) == []
+
+
+def test_decision_doc_scan_rejects_changelog_traversal(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "CHANGELOG.md").write_text("# Changelog\n\n- Architecture decision: escape.\n", encoding="utf-8")
+    (outside / "ADR.md").write_text("# ADR\n\n- accepted.\n", encoding="utf-8")
+    (outside / "decision.md").write_text("# Decision\n\n- accepted.\n", encoding="utf-8")
+    (outside / "architecture.md").write_text("# Architecture\n\n- accepted.\n", encoding="utf-8")
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    traversal_records = [
+        "../outside/CHANGELOG.md",
+        "../outside/ADR.md",
+        "../outside/decision.md",
+        "../outside/architecture.md",
+        str(outside / "ADR.md"),
+        "..\\outside\\ADR.md",
+    ]
+    (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "repo": {"path": str(repo)},
+                "records": [{"path": path, "path_normalized": path} for path in traversal_records],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert decision_doc_questions(audit_dir)
 
 
 def test_cli_synthesis_command_wires_outputs(tmp_path: Path) -> None:

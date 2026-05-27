@@ -46,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--run-config")
         subparser.add_argument("--profile")
         subparser.add_argument("--output-dir")
+        subparser.add_argument("--allowed-root", action="append", default=[])
+        subparser.add_argument("--allow-system-roots", action="store_true")
         subparser.add_argument("--dry-run", action="store_true")
         if command == "graph":
             subparser.add_argument("--renderer")
@@ -145,6 +147,7 @@ def planned_artifacts(command: str) -> list[str]:
         "wiki": [ARTIFACT_PATHS["WIKI_HOME"], ARTIFACT_PATHS["WIKI_REPO_SUMMARY"], ARTIFACT_PATHS["WIKI_ARCHITECTURE"], ARTIFACT_PATHS["WIKI_REUSE_INDEX"], ARTIFACT_PATHS["WIKI_RISK_INDEX"], ARTIFACT_PATHS["WIKI_MODULES"], ARTIFACT_PATHS["WIKI_FEATURES"], ARTIFACT_PATHS["WIKI_PATTERNS"], ARTIFACT_PATHS["WIKI_RISKS"], ARTIFACT_PATHS["WIKI_REUSE"], ARTIFACT_PATHS["WIKI_DECISIONS"], ARTIFACT_PATHS["GRAPH"], ARTIFACT_PATHS["GRAPH_NODES"], ARTIFACT_PATHS["GRAPH_EDGES"], ARTIFACT_PATHS["CORPUS_INDEX"], ARTIFACT_PATHS["CORPUS_SQLITE"]],
         "validate": [
             ARTIFACT_PATHS["VALIDATION_REPORT"],
+            ARTIFACT_PATHS["VALIDATION_REPORT_JSON"],
             ARTIFACT_PATHS["REPORT"],
             ARTIFACT_PATHS["OPEN_QUESTIONS"],
             ARTIFACT_PATHS["REVIEW_LEDGER"],
@@ -166,6 +169,8 @@ def build_overrides(args: argparse.Namespace, argv: list[str]) -> ArgvOverrides:
         argv=argv,
         profile=getattr(args, "profile", None),
         output_dir=getattr(args, "output_dir", None),
+        allowed_roots=tuple(getattr(args, "allowed_root", []) or []),
+        allow_system_roots=bool(getattr(args, "allow_system_roots", False)),
         dry_run=bool(getattr(args, "dry_run", False)),
         renderer=getattr(args, "renderer", None),
         graphify=bool(getattr(args, "graphify", False)),

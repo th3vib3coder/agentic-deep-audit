@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "name": "agentic-deep-audit",
+  "version": "0.1.0",
+  "description": "Evidence-first audit engine with Claude Code hook integration.",
+  "hooks": {
+    "settings": "hooks/hooks.json"
+  }
+}

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -14,6 +16,10 @@ from .adapters.base import AdapterStatus, append_tool_status
 from .adapters.loader import AdapterBlockedPrePromotion, validate_adapter_promotion
 from .models import ARTIFACT_PATHS, PLUGIN_ROOT
 from .policy import append_blocked_attempt, decide_command
+
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+INVISIBLE_CHARS = "\u00ad\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060\ufeff"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -31,13 +37,27 @@ def sha256_json(payload: dict[str, Any]) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def html_text(value: Any) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def mermaid_label(value: Any, max_length: int = 160) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    text = text.replace("```", "` ` `")
+    text = "".join(char for char in text if char not in INVISIBLE_CHARS)
+    text = html.escape(text, quote=True)
+    text = text.replace("[", "&#91;").replace("]", "&#93;")
+    text = text[:max_length]
+    return json.dumps(text)
+
+
 def mermaid_lines(graph: dict[str, Any]) -> list[str]:
     node_ids = {str(node["id"]): f"n{index}" for index, node in enumerate(graph.get("nodes", [])[:50], start=1) if isinstance(node, dict)}
     labels = {str(node.get("id")): str(node.get("label") or node.get("id")) for node in graph.get("nodes", []) if isinstance(node, dict)}
     lines = ["```mermaid", "graph TD"]
     for node_id, mermaid_id in node_ids.items():
-        label = labels.get(node_id, node_id).replace('"', "'")
-        lines.append(f'  {mermaid_id}["{label}"]')
+        label = mermaid_label(labels.get(node_id, node_id))
+        lines.append(f"  {mermaid_id}[{label}]")
     for edge in graph.get("edges", [])[:80]:
         if not isinstance(edge, dict):
             continue
@@ -93,18 +113,18 @@ def write_builtin_html(audit_dir: Path, graph: dict[str, Any]) -> Path:
     nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
     edges = graph.get("edges", []) if isinstance(graph.get("edges"), list) else []
     rows = "\n".join(
-        f"<li><code>{node.get('id')}</code> ({node.get('type')}): {node.get('label')}</li>"
+        f"<li><code>{html_text(node.get('id'))}</code> ({html_text(node.get('type'))}): {html_text(node.get('label'))}</li>"
         for node in nodes[:200]
         if isinstance(node, dict)
     )
     edge_rows = "\n".join(
-        f"<li><code>{edge.get('source')}</code> -> <code>{edge.get('target')}</code> ({edge.get('type')})</li>"
+        f"<li><code>{html_text(edge.get('source'))}</code> -&gt; <code>{html_text(edge.get('target'))}</code> ({html_text(edge.get('type'))})</li>"
         for edge in edges[:300]
         if isinstance(edge, dict)
     )
     html = f"""<!doctype html>
 <html lang=\"en\">
-<head><meta charset=\"utf-8\"><title>Agentic Deep Audit Graph</title></head>
+<head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\"><title>Agentic Deep Audit Graph</title></head>
 <body>
 <h1>Canonical Graph</h1>
 <p>Derived from <code>graph/graph.json</code>. Nodes: {len(nodes)}. Edges: {len(edges)}.</p>
@@ -174,6 +194,21 @@ def graph_hashes(canonical: dict[str, Any], graphify_graph: dict[str, Any]) -> t
     return sha256_json(canonical), sha256_json(graphify_graph)
 
 
+def markdown_fence_text(value: str) -> str:
+    """Render tool output inside a Markdown fence without allowing fence breakout."""
+
+    cleaned = ANSI_ESCAPE_RE.sub("", value)
+    cleaned = "".join(char for char in cleaned if ord(char) >= 32 or char in {"\n", "\t"})
+    cleaned = "".join(char for char in cleaned if char not in INVISIBLE_CHARS)
+    return cleaned.replace("```", "`\u200b``").strip()
+
+
+def markdown_inline_text(value: str) -> str:
+    """Render a one-line Markdown field derived from tool output."""
+
+    return markdown_fence_text(value).replace("\r", " ").replace("\n", " ")
+
+
 def write_graphify_report(audit_dir: Path, status: str, command: list[str], stdout: str, stderr: str, canonical_hash: str, graphify_hash: str | None) -> None:
     report = audit_dir / ARTIFACT_PATHS["GRAPHIFY_REPORT"]
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -187,9 +222,9 @@ def write_graphify_report(audit_dir: Path, status: str, command: list[str], stdo
     if graphify_hash is not None:
         lines.append(f"- Graphify graph hash: `{graphify_hash}`")
     if stdout.strip():
-        lines.extend(["", "## Stdout", "", "```text", stdout.strip(), "```"])
+        lines.extend(["", "## Stdout", "", "```text", markdown_fence_text(stdout), "```"])
     if stderr.strip():
-        lines.extend(["", "## Stderr", "", "```text", stderr.strip(), "```"])
+        lines.extend(["", "## Stderr", "", "```text", markdown_fence_text(stderr), "```"])
     report.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -214,7 +249,8 @@ def write_graphify_diff(audit_dir: Path, canonical_hash: str, graphify_hash: str
 
 def record_graphify_skip(audit_dir: Path, graph: dict[str, Any], reason: str, status: str, availability: str, command: list[str] | None = None, duration_ms: int | None = None, exit_code: int | None = None) -> None:
     skip_path = audit_dir / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]
-    skip_path.write_text(f"# Graphify Skipped\n\nReason: {reason}.\nCanonical graph hash: `{sha256_json(graph)}`.\n", encoding="utf-8")
+    safe_reason = markdown_inline_text(reason)
+    skip_path.write_text(f"# Graphify Skipped\n\nReason: {safe_reason}.\nCanonical graph hash: `{sha256_json(graph)}`.\n", encoding="utf-8")
     append_tool_status(
         audit_dir,
         AdapterStatus(

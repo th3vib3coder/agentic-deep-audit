@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,8 +19,79 @@ from .models import ARTIFACT_PATHS
 from .policy import decide_command, decide_network
 
 
+GIT_SAFE_CONFIG = [
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    f"core.hooksPath={os.devnull}",
+    "-c",
+    "uploadpack.packObjectsHook=",
+    "-c",
+    "protocol.ext.allow=never",
+    "-c",
+    "protocol.file.allow=never",
+    "-c",
+    "safe.directory=*",
+    "-c",
+    "diff.external=",
+    "-c",
+    "filter.lfs.required=false",
+    "-c",
+    "filter.lfs.clean=",
+    "-c",
+    "filter.lfs.smudge=",
+]
+
+
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def local_git_roots(repo_path: Path) -> list[Path]:
+    roots = [repo_path.resolve()]
+    current = repo_path.resolve()
+    for candidate in [current, *current.parents]:
+        if (candidate / ".git").exists():
+            roots.append(candidate.resolve())
+            break
+    return list(dict.fromkeys(roots))
+
+
+def safe_git_executable(repo_path: Path) -> tuple[str | None, str | None]:
+    command_path = shutil.which("git")
+    if command_path is None:
+        return None, "git executable not found"
+    resolved = Path(command_path).resolve()
+    for root in local_git_roots(repo_path):
+        if _inside(resolved, root):
+            return None, f"git executable inside target repo rejected: {resolved}"
+    return str(resolved), None
+
+
+def git_probe_env() -> dict[str, str]:
+    keep = {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TMP", "TEMP"}
+    env = {key: value for key, value in os.environ.items() if key.upper() in keep}
+    env.update(
+        {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PAGER": "cat",
+            "GIT_EXTERNAL_DIFF": "",
+            "HOME": "",
+        }
+    )
+    return env
 
 
 def run_git_command(repo_path: Path, args: list[str]) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
@@ -33,13 +106,33 @@ def run_git_command(repo_path: Path, args: list[str]) -> tuple[subprocess.Comple
     }
     if not decision.allowed:
         raise RuntimeError(f"git command blocked by policy: {decision.reason}")
+    git_path, skipped_reason = safe_git_executable(repo_path)
+    if skipped_reason is not None or git_path is None:
+        completed = subprocess.CompletedProcess(command, 127, "", skipped_reason or "git executable unavailable")
+        record["exit_code"] = completed.returncode
+        record["skipped_reason"] = skipped_reason or "git executable unavailable"
+        return completed, record
     try:
-        completed = subprocess.run(command, cwd=repo_path, text=True, capture_output=True, check=False, timeout=10)
-    except FileNotFoundError:
-        completed = subprocess.CompletedProcess(command, 127, "", "git executable not found")
+        completed = subprocess.run(
+            [git_path, *GIT_SAFE_CONFIG, *args],
+            cwd=repo_path,
+            env=git_probe_env(),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        completed = subprocess.CompletedProcess(command, 124, "", "git command timed out")
+    except OSError as exc:
+        completed = subprocess.CompletedProcess(command, 127, "", f"git command failed to start: {exc}")
     record["exit_code"] = completed.returncode
     if completed.returncode == 127:
-        record["skipped_reason"] = "git executable not found"
+        record["skipped_reason"] = completed.stderr or "git executable not found"
+    if completed.returncode == 124:
+        record["skipped_reason"] = "git command timed out"
     return completed, record
 
 

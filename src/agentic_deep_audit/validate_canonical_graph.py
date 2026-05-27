@@ -22,7 +22,10 @@ def load_json(path: Path, errors: list[str]) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         errors.append(f"invalid graph JSON artifact: {path}: {exc}")
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        errors.append(f"invalid graph JSON artifact: {path}: root must be object")
+        return {}
+    return payload
 
 
 def available_evidence(evidence_index: dict[str, Any]) -> set[str]:
@@ -194,6 +197,31 @@ def has_markdown_rows(path: Path) -> bool:
     return bool(markdown_row_labels(path))
 
 
+def split_markdown_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return []
+    body = stripped.strip("|")
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in body:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "|":
+            cells.append("".join(current).strip(" `"))
+            current = []
+            continue
+        current.append(char)
+    cells.append("".join(current).strip(" `"))
+    return cells
+
+
 def markdown_row_labels(path: Path) -> list[str]:
     if not path.exists():
         return []
@@ -202,7 +230,7 @@ def markdown_row_labels(path: Path) -> list[str]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.startswith("|"):
             continue
-        cells = [cell.strip(" `") for cell in line.strip().strip("|").split("|")]
+        cells = split_markdown_row(line)
         if not cells or all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells):
             continue
         if not header_consumed:
@@ -214,23 +242,23 @@ def markdown_row_labels(path: Path) -> list[str]:
     return labels
 
 
-def expected_graph_node_ids(audit_dir: Path) -> set[str]:
+def expected_graph_node_ids(audit_dir: Path, errors: list[str]) -> set[str]:
     expected: set[str] = {"repo:target"}
-    file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"], []) if (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).exists() else {}
+    file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"], errors) if (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).exists() else {}
     for record in file_index.get("records", []) if isinstance(file_index.get("records"), list) else []:
         if isinstance(record, dict):
             path = str(record.get("path_normalized") or record.get("path") or "")
             if path:
                 expected.add(f"artifact:file:{path}")
-    module_graph = load_json(audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"], []) if (audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]).exists() else {}
+    module_graph = load_json(audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"], errors) if (audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]).exists() else {}
     for node in module_graph.get("nodes", []) if isinstance(module_graph.get("nodes"), list) else []:
         if isinstance(node, dict) and node.get("id"):
             expected.add(str(node["id"]))
-    symbol_index = load_json(audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"], []) if (audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"]).exists() else {}
+    symbol_index = load_json(audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"], errors) if (audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"]).exists() else {}
     for symbol in symbol_index.get("symbols", []) if isinstance(symbol_index.get("symbols"), list) else []:
         if isinstance(symbol, dict) and symbol.get("symbol_id"):
             expected.add(str(symbol["symbol_id"]))
-    manifests = load_json(audit_dir / ARTIFACT_PATHS["MANIFESTS"], []) if (audit_dir / ARTIFACT_PATHS["MANIFESTS"]).exists() else {}
+    manifests = load_json(audit_dir / ARTIFACT_PATHS["MANIFESTS"], errors) if (audit_dir / ARTIFACT_PATHS["MANIFESTS"]).exists() else {}
     for record in manifests.get("records", []) if isinstance(manifests.get("records"), list) else []:
         if not isinstance(record, dict):
             continue
@@ -242,14 +270,14 @@ def expected_graph_node_ids(audit_dir: Path) -> set[str]:
         expected.add(f"feature:{stable_slug(label)}")
     for label in markdown_row_labels(audit_dir / ARTIFACT_PATHS["PATTERNS"]):
         expected.add(f"pattern:{stable_slug(label)}")
-    reuse = load_json(audit_dir / ARTIFACT_PATHS["REUSE_CARDS"], []) if (audit_dir / ARTIFACT_PATHS["REUSE_CARDS"]).exists() else {}
+    reuse = load_json(audit_dir / ARTIFACT_PATHS["REUSE_CARDS"], errors) if (audit_dir / ARTIFACT_PATHS["REUSE_CARDS"]).exists() else {}
     for card in reuse.get("cards", []) if isinstance(reuse.get("cards"), list) else []:
         if isinstance(card, dict):
             identifier = str(card.get("reuse_id") or card.get("candidate_id") or card.get("name") or "")
             if identifier:
                 expected.add(f"reuse:{stable_slug(identifier)}")
     for key, records_key, id_key in [("RISK_FINDINGS", "findings", "finding_id"), ("AGENTIC_SECURITY_FINDINGS", "findings", "finding_id"), ("SUSPICIOUS_BEHAVIORS", "behaviors", "behavior_id")]:
-        payload = load_json(audit_dir / ARTIFACT_PATHS[key], []) if (audit_dir / ARTIFACT_PATHS[key]).exists() else {}
+        payload = load_json(audit_dir / ARTIFACT_PATHS[key], errors) if (audit_dir / ARTIFACT_PATHS[key]).exists() else {}
         for item in payload.get(records_key, []) if isinstance(payload.get(records_key), list) else []:
             if isinstance(item, dict):
                 identifier = str(item.get(id_key) or item.get("code") or "")
@@ -263,26 +291,26 @@ def expected_graph_node_ids(audit_dir: Path) -> set[str]:
     return expected
 
 
-def expected_graph_edge_keys(audit_dir: Path) -> set[tuple[str, str, str]]:
+def expected_graph_edge_keys(audit_dir: Path, errors: list[str]) -> set[tuple[str, str, str]]:
     expected: set[tuple[str, str, str]] = set()
-    file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"], []) if (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).exists() else {}
+    file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"], errors) if (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).exists() else {}
     for record in file_index.get("records", []) if isinstance(file_index.get("records"), list) else []:
         if isinstance(record, dict):
             path = str(record.get("path_normalized") or record.get("path") or "")
             if path:
                 expected.add(("repo:target", f"artifact:file:{path}", "contains"))
-    module_graph = load_json(audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"], []) if (audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]).exists() else {}
+    module_graph = load_json(audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"], errors) if (audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]).exists() else {}
     for node in module_graph.get("nodes", []) if isinstance(module_graph.get("nodes"), list) else []:
         if isinstance(node, dict) and node.get("id") and node.get("type") == "module":
             expected.add(("repo:target", str(node["id"]), "contains"))
     for edge in module_graph.get("edges", []) if isinstance(module_graph.get("edges"), list) else []:
         if isinstance(edge, dict) and edge.get("source") and edge.get("target"):
             expected.add((str(edge["source"]), str(edge["target"]), "depends_on"))
-    symbol_index = load_json(audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"], []) if (audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"]).exists() else {}
+    symbol_index = load_json(audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"], errors) if (audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"]).exists() else {}
     for symbol in symbol_index.get("symbols", []) if isinstance(symbol_index.get("symbols"), list) else []:
         if isinstance(symbol, dict) and symbol.get("symbol_id") and symbol.get("path"):
             expected.add((f"module:{symbol['path']}", str(symbol["symbol_id"]), "contains"))
-    manifests = load_json(audit_dir / ARTIFACT_PATHS["MANIFESTS"], []) if (audit_dir / ARTIFACT_PATHS["MANIFESTS"]).exists() else {}
+    manifests = load_json(audit_dir / ARTIFACT_PATHS["MANIFESTS"], errors) if (audit_dir / ARTIFACT_PATHS["MANIFESTS"]).exists() else {}
     for record in manifests.get("records", []) if isinstance(manifests.get("records"), list) else []:
         if not isinstance(record, dict):
             continue
@@ -296,14 +324,14 @@ def expected_graph_edge_keys(audit_dir: Path) -> set[tuple[str, str, str]]:
         expected.add(("repo:target", f"feature:{stable_slug(label)}", "implements"))
     for label in markdown_row_labels(audit_dir / ARTIFACT_PATHS["PATTERNS"]):
         expected.add(("repo:target", f"pattern:{stable_slug(label)}", "implements"))
-    reuse = load_json(audit_dir / ARTIFACT_PATHS["REUSE_CARDS"], []) if (audit_dir / ARTIFACT_PATHS["REUSE_CARDS"]).exists() else {}
+    reuse = load_json(audit_dir / ARTIFACT_PATHS["REUSE_CARDS"], errors) if (audit_dir / ARTIFACT_PATHS["REUSE_CARDS"]).exists() else {}
     for card in reuse.get("cards", []) if isinstance(reuse.get("cards"), list) else []:
         if isinstance(card, dict):
             identifier = str(card.get("reuse_id") or card.get("candidate_id") or card.get("name") or "")
             if identifier:
                 expected.add(("repo:target", f"reuse:{stable_slug(identifier)}", "reuses"))
     for key, records_key, id_key in [("RISK_FINDINGS", "findings", "finding_id"), ("AGENTIC_SECURITY_FINDINGS", "findings", "finding_id"), ("SUSPICIOUS_BEHAVIORS", "behaviors", "behavior_id")]:
-        payload = load_json(audit_dir / ARTIFACT_PATHS[key], []) if (audit_dir / ARTIFACT_PATHS[key]).exists() else {}
+        payload = load_json(audit_dir / ARTIFACT_PATHS[key], errors) if (audit_dir / ARTIFACT_PATHS[key]).exists() else {}
         for item in payload.get(records_key, []) if isinstance(payload.get(records_key), list) else []:
             if isinstance(item, dict):
                 identifier = str(item.get(id_key) or item.get("code") or "")
@@ -325,13 +353,13 @@ def validate_required_source_coverage(audit_dir: Path, graph: dict[str, Any], er
         require_source_and_node(ARTIFACT_PATHS["FILE_INDEX"], "artifact", graph, sources, types, errors)
         if "file" not in kinds:
             errors.append("graph/graph.json missing file artifact nodes from FILE_INDEX.json")
-    module_graph = load_json(audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"], []) if (audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]).exists() else {}
+    module_graph = load_json(audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"], errors) if (audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]).exists() else {}
     if module_graph.get("nodes"):
         require_source_and_node(ARTIFACT_PATHS["MODULE_GRAPH"], "module", graph, sources, types, errors)
-    symbol_index = load_json(audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"], []) if (audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"]).exists() else {}
+    symbol_index = load_json(audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"], errors) if (audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"]).exists() else {}
     if symbol_index.get("symbols"):
         require_source_and_node(ARTIFACT_PATHS["SYMBOL_INDEX"], "symbol", graph, sources, types, errors)
-    manifests = load_json(audit_dir / ARTIFACT_PATHS["MANIFESTS"], []) if (audit_dir / ARTIFACT_PATHS["MANIFESTS"]).exists() else {}
+    manifests = load_json(audit_dir / ARTIFACT_PATHS["MANIFESTS"], errors) if (audit_dir / ARTIFACT_PATHS["MANIFESTS"]).exists() else {}
     dependencies_present = any(isinstance(record, dict) and record.get("dependencies") for record in manifests.get("records", []) if isinstance(manifests.get("records"), list))
     if dependencies_present:
         require_source_and_node(ARTIFACT_PATHS["MANIFESTS"], "artifact", graph, sources, types, errors)
@@ -341,12 +369,12 @@ def validate_required_source_coverage(audit_dir: Path, graph: dict[str, Any], er
         require_source_and_node(ARTIFACT_PATHS["FEATURE_CATALOG"], "feature", graph, sources, types, errors)
     if has_markdown_rows(audit_dir / ARTIFACT_PATHS["PATTERNS"]):
         require_source_and_node(ARTIFACT_PATHS["PATTERNS"], "pattern", graph, sources, types, errors)
-    reuse = load_json(audit_dir / ARTIFACT_PATHS["REUSE_CARDS"], []) if (audit_dir / ARTIFACT_PATHS["REUSE_CARDS"]).exists() else {}
+    reuse = load_json(audit_dir / ARTIFACT_PATHS["REUSE_CARDS"], errors) if (audit_dir / ARTIFACT_PATHS["REUSE_CARDS"]).exists() else {}
     if reuse.get("cards"):
         require_source_and_node(ARTIFACT_PATHS["REUSE_CARDS"], "reuse", graph, sources, types, errors)
     risk_present = False
     for key, records_key in [("RISK_FINDINGS", "findings"), ("AGENTIC_SECURITY_FINDINGS", "findings"), ("SUSPICIOUS_BEHAVIORS", "behaviors")]:
-        payload = load_json(audit_dir / ARTIFACT_PATHS[key], []) if (audit_dir / ARTIFACT_PATHS[key]).exists() else {}
+        payload = load_json(audit_dir / ARTIFACT_PATHS[key], errors) if (audit_dir / ARTIFACT_PATHS[key]).exists() else {}
         if payload.get(records_key):
             risk_present = True
             if ARTIFACT_PATHS[key] not in sources:
@@ -362,7 +390,7 @@ def validate_required_source_coverage(audit_dir: Path, graph: dict[str, Any], er
         if "wiki_page" not in kinds:
             errors.append("graph/graph.json missing wiki_page artifact nodes from wiki pages")
     actual_ids = {str(node.get("id")) for node in graph.get("nodes", []) if isinstance(node, dict) and node.get("id")}
-    missing_ids = sorted(expected_graph_node_ids(audit_dir) - actual_ids)
+    missing_ids = sorted(expected_graph_node_ids(audit_dir, errors) - actual_ids)
     if missing_ids:
         errors.append(f"graph/graph.json missing expected graph nodes: {', '.join(missing_ids[:5])}")
     actual_edges = {
@@ -370,7 +398,7 @@ def validate_required_source_coverage(audit_dir: Path, graph: dict[str, Any], er
         for edge in graph.get("edges", [])
         if isinstance(edge, dict) and edge.get("source") and edge.get("target") and edge.get("type")
     }
-    missing_edges = sorted(expected_graph_edge_keys(audit_dir) - actual_edges)
+    missing_edges = sorted(expected_graph_edge_keys(audit_dir, errors) - actual_edges)
     if missing_edges:
         preview = ", ".join(f"{source}->{target}:{edge_type}" for source, target, edge_type in missing_edges[:5])
         errors.append(f"graph/graph.json missing expected graph edges: {preview}")

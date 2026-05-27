@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import shutil
 import sqlite3
@@ -32,6 +33,30 @@ PHASES: list[tuple[int, str]] = [
 
 class BootstrapError(ConfigError):
     """Raised when phase 0 cannot create a reproducible run state."""
+
+
+GIT_SAFE_CONFIG = [
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    f"core.hooksPath={os.devnull}",
+    "-c",
+    "uploadpack.packObjectsHook=",
+    "-c",
+    "protocol.ext.allow=never",
+    "-c",
+    "protocol.file.allow=never",
+    "-c",
+    "safe.directory=*",
+    "-c",
+    "diff.external=",
+    "-c",
+    "filter.lfs.required=false",
+    "-c",
+    "filter.lfs.clean=",
+    "-c",
+    "filter.lfs.smudge=",
+]
 
 
 def enrich_tool_status(record: dict[str, Any], capability: str, provenance_class: str = "core") -> dict[str, Any]:
@@ -69,26 +94,96 @@ def copy_snapshot(source: Path, destination: Path) -> str:
     return sha256_file(destination)
 
 
-def detect_command(tool: str, version_args: list[str]) -> dict[str, Any]:
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def local_execution_roots(root: Path) -> list[Path]:
+    roots = [root.resolve()]
+    current = root.resolve()
+    for candidate in [current, *current.parents]:
+        if (candidate / ".git").exists():
+            roots.append(candidate.resolve())
+            break
+    return list(dict.fromkeys(roots))
+
+
+def git_probe_env() -> dict[str, str]:
+    keep = {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TMP", "TEMP"}
+    env = {key: value for key, value in os.environ.items() if key.upper() in keep}
+    env.update(
+        {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PAGER": "cat",
+            "GIT_EXTERNAL_DIFF": "",
+            "HOME": "",
+        }
+    )
+    return env
+
+
+def skipped_tool_status(tool: str, version_args: list[str], reason: str, notes: list[str] | None = None, exit_code: int | None = None) -> dict[str, Any]:
+    return enrich_tool_status(
+        {
+        "tool": tool,
+        "status": "skipped",
+        "available": False,
+        "version": None,
+        "command": [tool, *version_args],
+        "phase": "0",
+        "policy": "skipped",
+        "exit_code": exit_code,
+        "skipped_reason": reason,
+        "notes": notes or [],
+        },
+        capability=f"{tool}_version_probe",
+        provenance_class="core-optional",
+    )
+
+
+def detect_command(tool: str, version_args: list[str], allowed_root: Path | None = None) -> dict[str, Any]:
     command_path = shutil.which(tool)
     if command_path is None:
-        return enrich_tool_status(
-            {
-            "tool": tool,
-            "status": "skipped",
-            "available": False,
-            "version": None,
-            "command": [tool, *version_args],
-            "phase": "0",
-            "policy": "skipped",
-            "exit_code": None,
-            "skipped_reason": f"{tool} not found on PATH",
-            "notes": [],
-            },
-            capability=f"{tool}_version_probe",
-            provenance_class="core-optional",
+        return skipped_tool_status(tool, version_args, f"{tool} not found on PATH")
+    resolved_command = Path(command_path).resolve()
+    root = (allowed_root or Path.cwd()).resolve()
+    forbidden_roots = local_execution_roots(root) if tool == "git" else [root]
+    matched_root = next((candidate for candidate in forbidden_roots if _inside(resolved_command, candidate)), None)
+    if matched_root is not None:
+        return skipped_tool_status(
+            tool,
+            version_args,
+            f"{tool} path inside audit target root rejected",
+            notes=[str(resolved_command), f"target_root={matched_root}"],
         )
-    completed = subprocess.run([command_path, *version_args], text=True, capture_output=True, check=False, timeout=10)
+    command = [str(resolved_command), *version_args]
+    env = None
+    if tool == "git":
+        command = [str(resolved_command), *GIT_SAFE_CONFIG, *version_args]
+        env = git_probe_env()
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=10,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return skipped_tool_status(tool, version_args, f"{tool} version command timed out", notes=[str(resolved_command)])
+    except OSError as exc:
+        return skipped_tool_status(tool, version_args, f"{tool} version command failed to start: {exc}", notes=[str(resolved_command)])
     version = (completed.stdout or completed.stderr).strip().splitlines()[0] if (completed.stdout or completed.stderr).strip() else None
     if completed.returncode != 0 or not version:
         return enrich_tool_status(
@@ -209,7 +304,7 @@ def bootstrap_audit(run_config: dict[str, Any], cwd: Path | None = None) -> Path
             if provenance.get("config_sha256") and provenance["config_sha256"] != snapshot_hash:
                 raise BootstrapError("config snapshot hash does not match normalized config hash")
 
-    tools = [detect_python(), detect_command("git", ["--version"]), detect_command("rg", ["--version"]), detect_sqlite_fts5()]
+    tools = [detect_python(), detect_command("git", ["--version"], allowed_root=base), detect_command("rg", ["--version"], allowed_root=base), detect_sqlite_fts5()]
 
     network_policy_path = Path(str(run_config.get("network_policy_file") or ARTIFACT_PATHS["NETWORK_POLICY"]))
     if not network_policy_path.is_absolute():
@@ -268,6 +363,7 @@ def load_run_config_for_bootstrap(args: argparse.Namespace, argv: list[str]) -> 
         argv=argv,
         profile=args.profile,
         output_dir=args.output_dir,
+        allowed_roots=tuple(args.allowed_root or []),
         dry_run=False,
     )
     if args.config and args.run_config:
@@ -287,6 +383,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-config")
     parser.add_argument("--profile")
     parser.add_argument("--output-dir")
+    parser.add_argument("--allowed-root", action="append", default=[])
     args = parser.parse_args(actual_argv)
     try:
         audit_dir = bootstrap_audit(load_run_config_for_bootstrap(args, actual_argv))

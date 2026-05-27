@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+import fnmatch
 from pathlib import Path
 from typing import Any
 
 from .config import sha256_file
 from .models import ARTIFACT_PATHS, PLUGIN_ROOT
+from .resources import template_dir
 
 
 class ReportGateError(ValueError):
@@ -61,6 +63,18 @@ COMPLETION_ALTERNATIVES = [
     ["SBOM", "SBOM_SKIPPED"],
     ["MCP_CONFIG", "MCP_DEFERRED", "MCP_COLLISION_REPORT"],
 ]
+SECRET_ARTIFACT_PATTERNS = (
+    ".env",
+    ".env.*",
+    "*.env",
+    "*.key",
+    "*.pem",
+    "id_*",
+    "credentials*",
+    "*credentials*",
+    "*secret*",
+    "*token*",
+)
 
 
 def read_text(path: Path) -> str:
@@ -96,8 +110,14 @@ def validation_blocker_count(text: str) -> int | None:
 
 
 def validation_passed(audit_dir: Path) -> bool:
-    text = read_text(audit_dir / ARTIFACT_PATHS["VALIDATION_REPORT"])
-    return "Status: `pass`" in text and validation_blocker_count(text) == 0
+    structured_path = audit_dir / ARTIFACT_PATHS["VALIDATION_REPORT_JSON"]
+    if not structured_path.exists():
+        return False
+    try:
+        payload = json.loads(structured_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return payload.get("status") == "pass" and payload.get("blocker_count") == 0
 
 
 def validation_blockers(audit_dir: Path) -> list[str]:
@@ -200,6 +220,9 @@ def artifact_inventory(audit_dir: Path, excluded: set[str] | None = None) -> lis
             continue
         relative = path.relative_to(audit_dir).as_posix()
         if relative in excluded:
+            continue
+        parts = [path.name.casefold(), *(part.casefold() for part in path.relative_to(audit_dir).parts)]
+        if any(fnmatch.fnmatchcase(part, pattern) for part in parts for pattern in SECRET_ARTIFACT_PATTERNS):
             continue
         records.append((relative, path.stat().st_size, sha256_file(path)))
     return records
@@ -342,7 +365,7 @@ def report_sections(audit_dir: Path) -> dict[str, str]:
 
 
 def render_report(audit_dir: Path) -> str:
-    template_path = PLUGIN_ROOT / "assets" / "templates" / "report.md"
+    template_path = template_dir() / "report.md"
     template = template_path.read_text(encoding="utf-8")
     rendered = template.replace("{{SCOPE_AND_VALIDATION}}", report_scope_section(audit_dir))
     for token, value in report_sections(audit_dir).items():
