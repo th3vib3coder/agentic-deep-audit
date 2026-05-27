@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import re
-import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility.
+    import tomli as tomllib
 
 from defusedxml import ElementTree as DefusedET
 from defusedxml.common import DefusedXmlException

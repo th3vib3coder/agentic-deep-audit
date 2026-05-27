@@ -1,6 +1,6 @@
 # Agentic Deep Audit Review Ledger
 
-Status: R7 remediation implemented locally; external review pending.
+Status: R8 investigation complete; awaiting independent External R8 ACCEPT.
 
 Sources: `../../piano_doc/013_ledger.md`, `../../piano_doc/implementazione/001_seq_gate_hook_and_repo_discipline.md`.
 
@@ -12,6 +12,30 @@ Validation: no sequence row can move from pending to ACCEPT without independent 
 
 Archive: `REVIEW_LEDGER_ARCHIVE_001.md` preserves SEQ-014 and earlier HAT 2 rows.
 Archive: `REVIEW_LEDGER_ARCHIVE_002.md` preserves SEQ-015 through SEQ-023.
+
+## R8 - Wheel Test Investigation
+
+Author: Codex.
+Gate: external R7 `ACCEPT with 1 environmental caveat`; no self-ACCEPT issued.
+Scope: `tests/test_release_packaging.py::test_installed_wheel_loads_runtime_resources_and_adapter_decision` investigation only, plus minimum Python 3.10 compatibility fix needed to execute the declared `requires-python >=3.10` matrix.
+Commands:
+
+- Bootstrap: `winget install --id Python.Python.3.10 -e --source winget --accept-source-agreements --accept-package-agreements --silent` -> installed Python 3.10.11.
+- Bootstrap: `winget install --id Python.Python.3.11 -e --source winget --accept-source-agreements --accept-package-agreements --silent` -> installed Python 3.11.9.
+- Interpreter check: `py -0p` -> Python 3.10, 3.11, 3.12, 3.13 and 3.14 available.
+- Pre-fix matrix attempt: Python 3.10 target test collection failed before wheel probe with `ModuleNotFoundError: No module named 'tomllib'`.
+- R8 fix: added `tomli>=2.0; python_version < '3.11'` and `tomllib` fallback imports for Python 3.10 TOML readers.
+- Venv matrix: target wheel test passed on Python 3.10.11, 3.11.9, 3.12.10 and 3.14.0 with venv-local `pytest`, `setuptools>=68`, `wheel` and `tomli`.
+
+Findings:
+
+- The external line-185 wheel probe failure was not reproduced locally after isolated build/test environments were used.
+- Earlier local 3.12/3.13 direct probes failed before the target probe because global interpreter environments lacked `setuptools.build_meta` while the test intentionally builds with `--no-build-isolation`.
+- Python 3.10 revealed a real compatibility gap in TOML imports; it was independent of R7 and inconsistent with the declared `requires-python >=3.10`.
+- No Python 3.14-specific failure was reproduced; no skip marker or `<3.14` cap was added.
+
+Review verdict: R8 investigation complete; awaiting independent External R8 ACCEPT.
+Status: external review pending.
 
 ## R7 - External R6.2 Redirect Remediation
 

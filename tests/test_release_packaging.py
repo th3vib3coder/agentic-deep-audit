@@ -7,9 +7,13 @@ import shutil
 import subprocess
 import sys
 import time
-import tomllib
 import zipfile
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility.
+    import tomli as tomllib
 
 from agentic_deep_audit.models import PLUGIN_ROOT
 from agentic_deep_audit.resources import policy_dir, schema_dir, template_dir
