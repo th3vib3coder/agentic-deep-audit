@@ -10,8 +10,10 @@ from pathlib import Path
 
 import pytest
 
+from agentic_deep_audit import audit_evidence
 from agentic_deep_audit.audit_evidence import build_text_view, detect_line_ending, sha256_range, validate_claims_reach_evidence
 from agentic_deep_audit.audit_validate import validate_audit, validate_evidence_index_artifact
+from agentic_deep_audit.audit_validate_evidence import collect_secret_paths, collect_unreachable_evidence_ids
 from agentic_deep_audit.models import ARTIFACT_PATHS
 
 
@@ -286,6 +288,66 @@ def test_cross_artifact_evidence_ids_reject_blank_or_non_string(tmp_path: Path) 
     assert not validation.ok
     assert any("contains invalid evidence id: ''" in error for error in validation.errors)
     assert any("contains invalid evidence id: None" in error for error in validation.errors)
+
+
+def nest_payload(payload: object, depth: int) -> object:
+    value = payload
+    for _ in range(depth):
+        value = {"nested": [value]}
+    return value
+
+
+def test_cross_artifact_evidence_walker_has_depth_budget_not_size_cap() -> None:
+    errors: list[str] = []
+    payload = nest_payload({"evidence_ids": ["ev-999999"]}, depth=12)
+
+    collect_unreachable_evidence_ids(payload, "DEEP.json", {"ev-000001"}, errors, max_depth=5)
+
+    assert any("exceeds maximum JSON traversal depth: 5" in error for error in errors)
+    assert not any("size cap" in error for error in errors)
+
+
+def test_cross_artifact_evidence_walker_still_detects_ids_within_budget() -> None:
+    errors: list[str] = []
+    payload = nest_payload({"evidence_ids": ["ev-999999"]}, depth=2)
+
+    collect_unreachable_evidence_ids(payload, "SHALLOW.json", {"ev-000001"}, errors, max_depth=8)
+
+    assert any("references unreachable evidence id: ev-999999" in error for error in errors)
+
+
+def test_secret_path_walker_has_depth_budget_and_still_detects_shallow_secret() -> None:
+    deep_results: list[str] = []
+    collect_secret_paths(nest_payload({"token": "ghp_abcdefghijklmnop1234567890"}, depth=12), "PROVENANCE", deep_results, max_depth=5)
+
+    shallow_results: list[str] = []
+    collect_secret_paths(nest_payload({"token": "ghp_abcdefghijklmnop1234567890"}, depth=2), "PROVENANCE", shallow_results, max_depth=8)
+
+    assert any("<depth-limit:5>" in result for result in deep_results)
+    assert any(result.endswith(".token") for result in shallow_results)
+
+
+def test_sync_evidence_identity_uses_capped_bom_aware_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    evidence_path = audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]
+    evidence_path.write_text('{"repo": {}, "evidence": []}\n', encoding="utf-8")
+    calls: list[Path] = []
+
+    def capped_reader(path: Path, **_: object) -> str:
+        calls.append(path)
+        return '{"repo": {}, "evidence": []}\n'
+
+    monkeypatch.setattr(audit_evidence, "read_text_auto_capped", capped_reader)
+
+    audit_evidence.sync_evidence_identity_from_provenance(
+        audit_dir,
+        {"git": {"commit": "a" * 40, "target_path": str(tmp_path / "repo")}},
+    )
+
+    assert calls == [evidence_path]
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert payload["repo"]["commit"] == "a" * 40
 
 
 @pytest.mark.parametrize("unsafe_path", ["../outside.txt", "/outside.txt", "\\outside.txt", "a:b.txt"])

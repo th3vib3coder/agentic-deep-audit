@@ -12,7 +12,7 @@ from typing import Any
 
 from .adapters.base import AdapterStatus, append_tool_status
 from .audit_canonical_graph import run_canonical_graph_outputs
-from .limits import FileSizeLimitError, read_bytes_capped
+from .limits import FileSizeLimitError, read_bytes_capped, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -55,7 +55,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="graph input")
 
 
 def evidence_map(evidence_index: dict[str, Any]) -> dict[str, list[str]]:
@@ -494,7 +494,7 @@ def write_architecture(path: Path, baseline: str) -> None:
     if not path.exists():
         path.write_text("# Architecture\n\n" + baseline, encoding="utf-8")
         return
-    text = path.read_text(encoding="utf-8")
+    text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="architecture").replace("\r\n", "\n").replace("\r", "\n")
     if "## Baseline" not in text:
         path.write_text(text.rstrip() + "\n\n" + baseline, encoding="utf-8")
         return

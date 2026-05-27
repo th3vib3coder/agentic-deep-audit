@@ -9,7 +9,7 @@ from pathlib import Path
 import agentic_deep_audit.audit_manifest as audit_manifest
 from agentic_deep_audit.audit_validate import validate_audit, validate_manifest_artifacts
 from agentic_deep_audit.models import ARTIFACT_PATHS
-from agentic_deep_audit.policy import decide_command
+from agentic_deep_audit.policy import INVALID_COMMAND_TOKEN, command_tokens_from_text, decide_command
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -145,9 +145,9 @@ def test_build_test_map_records_commands_as_observed_not_executed(tmp_path: Path
     _, audit_dir = run_inventory_fixture(tmp_path)
     build_map = (audit_dir / ARTIFACT_PATHS["BUILD_TEST_MAP"]).read_text(encoding="utf-8")
 
-    assert "`jest --runInBand`" in build_map
-    assert "`python -m pytest`" in build_map
-    command_rows = [line for line in build_map.splitlines() if line.startswith("| ") and "`" in line]
+    assert "jest --runInBand" in build_map
+    assert "python -m pytest" in build_map
+    command_rows = [line for line in build_map.splitlines() if line.startswith("| ") and "observed, not executed" in line]
     assert command_rows
     assert all("observed, not executed" in row for row in command_rows)
     assert all("target_repo_manifest_no_exec" in row for row in command_rows)
@@ -165,6 +165,25 @@ def test_manifest_commands_are_denied_by_target_repo_origin(tmp_path: Path) -> N
     assert command["policy_rule"] == "target_repo_manifest_no_exec"
     assert not decision.allowed
     assert decision.policy_rule == "target_repo_manifest_no_exec"
+
+
+def test_manifest_and_hook_command_tokenization_share_invalid_quote_semantics() -> None:
+    command = "git log --oneline '"
+
+    assert audit_manifest.command_tokens(command) == command_tokens_from_text(command, posix=True)
+    assert audit_manifest.command_tokens(command) == [INVALID_COMMAND_TOKEN]
+
+
+def test_build_test_map_escapes_command_cells_without_fake_evidence_ids() -> None:
+    row = audit_manifest.observed_command("echo `ev-999999` | cat\nnext \u202e", "package.json:scripts.bad")
+
+    text = audit_manifest.build_test_map_markdown([], [{"commands": [row]}])
+
+    assert "ev-999999" not in text
+    assert "ev\\-999999" in text
+    assert "\\|" in text
+    assert "\\`" in text
+    assert "\u202e" not in text
 
 
 def test_ci_map_records_workflow_commands_without_executing(tmp_path: Path) -> None:

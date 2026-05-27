@@ -14,6 +14,7 @@ from urllib.parse import urlparse, urlunparse
 
 from .audit_evidence import sync_evidence_identity_from_provenance
 from .bootstrap import enrich_tool_status
+from .limits import FileSizeLimitError, read_text_auto_capped
 from .mcp_policy import looks_secret, redact_value
 from .models import ARTIFACT_PATHS
 from .policy import decide_command, decide_network
@@ -142,7 +143,11 @@ def parse_git_config_remotes(git_dir: Path) -> list[dict[str, str | None]]:
         return []
     remotes: list[dict[str, str | None]] = []
     current: dict[str, str | None] | None = None
-    for line in config.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+        config_text = read_text_auto_capped(config, encoding="utf-8", errors="replace", label="git config")
+    except (OSError, FileSizeLimitError):
+        return []
+    for line in config_text.splitlines():
         stripped = line.strip()
         match = re.fullmatch(r'\[remote "([^"]+)"\]', stripped)
         if match:
@@ -164,11 +169,16 @@ def redact_remote_url(value: str) -> str:
     return str(redact_value(value))
 
 
-def sanitize_for_provenance(value: Any) -> Any:
+MAX_PROVENANCE_SANITIZE_DEPTH = 256
+
+
+def sanitize_for_provenance(value: Any, depth: int = 0) -> Any:
+    if depth > MAX_PROVENANCE_SANITIZE_DEPTH:
+        return "<redacted:depth-limit>"
     if isinstance(value, dict):
-        return {key: sanitize_for_provenance(item) for key, item in value.items()}
+        return {key: sanitize_for_provenance(item, depth + 1) for key, item in value.items()}
     if isinstance(value, list):
-        return [sanitize_for_provenance(item) for item in value]
+        return [sanitize_for_provenance(item, depth + 1) for item in value]
     if isinstance(value, str):
         parsed = urlparse(value)
         if parsed.username or parsed.password:
@@ -204,7 +214,11 @@ def parse_tags(git_dir: Path) -> list[str]:
                 tags.add(path.relative_to(tag_root).as_posix())
     packed = git_dir / "packed-refs"
     if packed.exists():
-        for line in packed.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            packed_text = read_text_auto_capped(packed, encoding="utf-8", errors="replace", label="packed refs")
+        except (OSError, FileSizeLimitError):
+            packed_text = ""
+        for line in packed_text.splitlines():
             if line.startswith("#") or not line.strip() or line.startswith("^"):
                 continue
             parts = line.split()
@@ -219,7 +233,11 @@ def parse_submodules(repo_path: Path) -> list[dict[str, str | None]]:
         return []
     submodules: list[dict[str, str | None]] = []
     current: dict[str, str | None] | None = None
-    for line in gitmodules.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+        gitmodules_text = read_text_auto_capped(gitmodules, encoding="utf-8", errors="replace", label="gitmodules")
+    except (OSError, FileSizeLimitError):
+        return []
+    for line in gitmodules_text.splitlines():
         stripped = line.strip()
         match = re.fullmatch(r'\[submodule "([^"]+)"\]', stripped)
         if match:
@@ -251,11 +269,11 @@ def resolve_github_target(run_config: dict[str, Any], remotes: list[dict[str, st
 
 def append_github_tool_status(audit_dir: Path, run_config: dict[str, Any], github_target: str | None, mode: str) -> None:
     path = audit_dir / ARTIFACT_PATHS["TOOL_STATUS"]
-    payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"schema_version": "1.0", "tools": []}
+    payload = json.loads(read_text_auto_capped(path, encoding="utf-8", label="tool status")) if path.exists() else {"schema_version": "1.0", "tools": []}
     network_snapshot = audit_dir / ARTIFACT_PATHS["NETWORK_POLICY_SNAPSHOT"]
     github_network_allowed = False
     if network_snapshot.exists():
-        policy = json.loads(network_snapshot.read_text(encoding="utf-8"))
+        policy = json.loads(read_text_auto_capped(network_snapshot, encoding="utf-8", label="network policy snapshot"))
         github_network_allowed = decide_network("api.github.com", policy=policy).allowed
     if github_network_allowed and github_target:
         record = {

@@ -12,6 +12,7 @@ from typing import Any
 
 from .adapters.base import AdapterStatus, append_tool_status
 from .config import DEFAULT_RRF, sha256_file
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .mcp_policy import SECRET_PATTERNS, looks_secret, redact_value
 from .models import ARTIFACT_PATHS
 from .audit_wiki import WIKI_SOURCE_KEYS
@@ -39,7 +40,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="corpus input")
 
 
 def repo_path_from(file_index: dict[str, Any], run_config: dict[str, Any]) -> Path:
@@ -173,10 +174,8 @@ def text_file_body(repo_path: Path, path_value: str, binary: bool, max_bytes: in
         path = resolve_repo_file(repo_path, path_value)
         if path is None or not path.is_file():
             return ""
-        if path.stat().st_size > max_bytes:
-            return ""
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        return read_text_auto_capped(path, encoding="utf-8", errors="replace", max_bytes=max_bytes, label="corpus source")
+    except (OSError, FileSizeLimitError):
         return ""
 
 
@@ -370,7 +369,10 @@ def populate_wiki(connection: sqlite3.Connection, audit_dir: Path) -> int:
     count = 0
     for path in sorted(root.rglob("*.md")):
         relative = path.relative_to(audit_dir).as_posix()
-        raw = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            raw = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="corpus wiki")
+        except (OSError, FileSizeLimitError):
+            continue
         body, _ = redact_text(raw)
         evidence_ids = sorted(set(re.findall(r"ev-\d{6,}", body)))
         title = markdown_title(body, path)

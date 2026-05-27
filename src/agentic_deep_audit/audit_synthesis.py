@@ -8,7 +8,9 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
+from .sanitize import clean_markdown_text, markdown_table_cell
 
 
 MARKDOWN_INVISIBLE_CHARS = "\u00ad\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060\u2066\u2067\u2068\u2069\ufeff"
@@ -40,7 +42,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="synthesis input")
 
 
 def load_optional_json(audit_dir: Path, artifact_key: str) -> dict[str, Any]:
@@ -70,14 +72,11 @@ def ev(ids: list[str]) -> str:
 
 
 def clean_text(value: Any, max_chars: int = 300) -> str:
-    text = str(value or "")
-    text = "".join(char for char in text if char not in MARKDOWN_INVISIBLE_CHARS and not (0xE0000 <= ord(char) <= 0xE007F))
-    text = "".join(char for char in text if char in {"\n", "\t"} or ord(char) >= 32)
-    return text[:max_chars]
+    return clean_markdown_text(value, max_chars)
 
 
 def markdown_cell(value: Any, max_chars: int = 300) -> str:
-    return re.sub(r"\s+", " ", clean_text(value, max_chars)).strip().replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ")
+    return markdown_table_cell(value, max_chars)
 
 
 def section_bounds(text: str, heading: str) -> tuple[int, int] | None:
@@ -108,7 +107,11 @@ def baseline_section(text: str) -> str:
 
 def enrich_architecture(audit_dir: Path, module_graph: dict[str, Any], symbol_index: dict[str, Any], surfaces: dict[str, dict[str, Any]]) -> None:
     path = audit_dir / ARTIFACT_PATHS["ARCHITECTURE"]
-    original = path.read_text(encoding="utf-8") if path.exists() and path.stat().st_size <= MAX_ARCHITECTURE_BYTES else "# Architecture\n\n## Baseline\n\n- No baseline graph data available.\n"
+    try:
+        original = read_text_auto_capped(path, encoding="utf-8", errors="replace", max_bytes=MAX_ARCHITECTURE_BYTES, label="architecture") if path.exists() else "# Architecture\n\n## Baseline\n\n- No baseline graph data available.\n"
+    except (OSError, FileSizeLimitError):
+        original = "# Architecture\n\n## Baseline\n\n- No baseline graph data available.\n"
+    original = original.replace("\r\n", "\n").replace("\r", "\n")
     baseline_bounds = section_bounds(original, "## Baseline")
     baseline = baseline_section(original) or "## Baseline\n\n- No baseline graph data available.\n"
     module_count = len(module_graph.get("nodes", []))
@@ -301,10 +304,10 @@ def resolve_repo_relative_file(repo_path: Path, path_value: str) -> Path | None:
 def changelog_has_decision_marker(repo_path: Path, path_value: str) -> bool:
     try:
         source = resolve_repo_relative_file(repo_path, path_value)
-        if source is None or source.stat().st_size > MAX_DECISION_DOC_BYTES:
+        if source is None:
             return False
-        text = source.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        text = read_text_auto_capped(source, encoding="utf-8", errors="replace", max_bytes=MAX_DECISION_DOC_BYTES, label="decision document")
+    except (OSError, FileSizeLimitError):
         return False
     return bool(re.search(r"\b(adr|architecture decision|decision|decided|rationale)\b", text, flags=re.IGNORECASE))
 

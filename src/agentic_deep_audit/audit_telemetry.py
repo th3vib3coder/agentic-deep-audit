@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .audit_provenance import run_git_command
-from .limits import FileSizeLimitError, read_text_auto_capped
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 from .policy import decide_network
 
@@ -77,7 +77,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="telemetry input")
 
 
 def evidence_by_path(audit_dir: Path) -> dict[str, str]:

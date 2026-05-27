@@ -4,9 +4,11 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
+from agentic_deep_audit.policy import CommandDecision, append_blocked_attempt
 from agentic_deep_audit.sanitize import sanitize_markdown
 
 
@@ -130,6 +132,41 @@ def test_host_pre_tool_event_blocks_unbalanced_shell_command(tmp_path: Path) -> 
 
     assert result.returncode == 2
     assert attempts["attempts"][0]["command"] == ["__invalid_command__"]
+
+
+def test_blocked_attempt_append_keeps_repeated_same_command_attempts(tmp_path: Path) -> None:
+    decision = CommandDecision("block", ["npm", "test"], "host_pre_tool", "blocked_always", "npm is always blocked")
+
+    append_blocked_attempt(tmp_path / "audit", decision)
+    append_blocked_attempt(tmp_path / "audit", decision)
+
+    attempts = json.loads((tmp_path / "audit" / ARTIFACT_PATHS["BLOCKED_COMMANDS_ATTEMPTS"]).read_text(encoding="utf-8"))
+    assert len(attempts["attempts"]) == 2
+
+
+def test_blocked_attempt_append_dedupes_same_hook_event_id(tmp_path: Path) -> None:
+    decision = CommandDecision("block", ["npm", "test"], "host_pre_tool", "blocked_always", "npm is always blocked")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(lambda _: append_blocked_attempt(tmp_path / "audit", decision, attempt_id="hook-same-event"), range(2)))
+
+    attempts = json.loads((tmp_path / "audit" / ARTIFACT_PATHS["BLOCKED_COMMANDS_ATTEMPTS"]).read_text(encoding="utf-8"))
+    assert len(attempts["attempts"]) == 1
+    assert attempts["attempts"][0]["attempt_id"] == "hook-same-event"
+    assert not (tmp_path / "audit" / "BLOCKED_COMMANDS_ATTEMPTS.json.lock").exists()
+
+
+def test_blocked_attempt_append_preserves_concurrent_unique_attempts(tmp_path: Path) -> None:
+    decisions = [
+        CommandDecision("block", ["npm", "test", str(index)], "host_pre_tool", "blocked_always", "npm is always blocked")
+        for index in range(12)
+    ]
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        list(executor.map(lambda item: append_blocked_attempt(tmp_path / "audit", item), decisions))
+
+    attempts = json.loads((tmp_path / "audit" / ARTIFACT_PATHS["BLOCKED_COMMANDS_ATTEMPTS"]).read_text(encoding="utf-8"))
+    assert len(attempts["attempts"]) == len(decisions)
 
 
 def test_registered_hook_command_runs_without_pythonpath(tmp_path: Path) -> None:

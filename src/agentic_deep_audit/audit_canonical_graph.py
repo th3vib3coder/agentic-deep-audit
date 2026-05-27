@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit_graph_renderers import write_graph_renderer_outputs, write_graphify_outputs
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -20,8 +21,8 @@ def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        payload = read_json_capped(path, label="canonical graph input")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
 
@@ -206,7 +207,11 @@ def markdown_table_rows(path: Path) -> list[tuple[str, list[str]]]:
         return []
     rows: list[tuple[str, list[str]]] = []
     header_consumed = False
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="canonical graph markdown")
+    except (OSError, FileSizeLimitError):
+        return []
+    for line in text.splitlines():
         if not line.startswith("|"):
             continue
         cells = split_markdown_row(line)
@@ -279,7 +284,10 @@ def add_wiki_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: dic
     for path in sorted(wiki_root.rglob("*.md")):
         relative = path.relative_to(audit_dir).as_posix()
         source_artifacts.add(relative)
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="canonical graph wiki")
+        except (OSError, FileSizeLimitError):
+            continue
         evidence_ids = evidence_from_text(text)
         node_id = artifact_node_id(f"wiki:{relative}")
         add_node(nodes, node_id, "artifact", relative, evidence_ids, artifact_kind="wiki_page", path=relative)

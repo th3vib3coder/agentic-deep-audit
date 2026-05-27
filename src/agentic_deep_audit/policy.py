@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import shlex
+import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .limits import read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS, PLUGIN_ROOT
 from .resources import policy_dir
 
 
 POLICY_ROOT = policy_dir()
+INVALID_COMMAND_TOKEN = "__invalid_command__"
+BLOCKED_ATTEMPT_LOCK_TIMEOUT_SECONDS = 5.0
+BLOCKED_ATTEMPT_STALE_LOCK_SECONDS = 60.0
 DANGEROUS_ARGS_BY_COMMAND = {
     "git": {
         "-c",
@@ -68,10 +77,11 @@ class BlockedCommandAttempt:
     policy_rule: str
     evidence_ids: list[str] = field(default_factory=list)
     redacted_args: list[str] = field(default_factory=list)
+    attempt_id: str | None = None
 
 
 def load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="policy JSON")
 
 
 def load_blocked_commands_policy(path: Path | None = None) -> dict:
@@ -80,6 +90,21 @@ def load_blocked_commands_policy(path: Path | None = None) -> dict:
 
 def load_default_network_policy(path: Path | None = None) -> dict:
     return load_json(path or POLICY_ROOT / "DEFAULT_NETWORK_POLICY.json")
+
+
+def command_tokens_from_text(command: str, *, posix: bool = True) -> list[str]:
+    if not isinstance(command, str) or not command.strip():
+        return []
+    try:
+        tokens = shlex.split(command, posix=posix)
+    except ValueError:
+        return [INVALID_COMMAND_TOKEN]
+    return tokens or [command.strip()]
+
+
+def blocked_attempt_event_id(event: dict) -> str:
+    event_bytes = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8", errors="replace")
+    return f"hook-{hashlib.sha256(event_bytes).hexdigest()[:24]}"
 
 
 def _subcommand_allowed(actual: list[str], allowed: list[str]) -> bool:
@@ -161,12 +186,42 @@ def decide_command(command: list[str], origin: str, mode: str = "source-audit", 
     return CommandDecision("block", command, origin, "not_allowlisted", "command is not in allowlist")
 
 
-def append_blocked_attempt(audit_dir: Path, decision: CommandDecision, evidence_ids: list[str] | None = None) -> Path:
+@contextmanager
+def _blocked_attempt_lock(path: Path):
+    lock_path = path.with_suffix(f"{path.suffix}.lock")
+    start = time.monotonic()
+    handle: int | None = None
+    while handle is None:
+        try:
+            handle = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except (FileExistsError, PermissionError):
+            try:
+                lock_age = time.time() - lock_path.stat().st_mtime
+            except OSError:
+                lock_age = 0
+            if lock_age >= BLOCKED_ATTEMPT_STALE_LOCK_SECONDS:
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            if time.monotonic() - start >= BLOCKED_ATTEMPT_LOCK_TIMEOUT_SECONDS:
+                raise TimeoutError(f"timed out waiting for blocked-attempt lock: {lock_path}")
+            time.sleep(0.02)
+    try:
+        os.write(handle, str(os.getpid()).encode("ascii", errors="ignore"))
+        yield
+    finally:
+        os.close(handle)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def append_blocked_attempt(audit_dir: Path, decision: CommandDecision, evidence_ids: list[str] | None = None, attempt_id: str | None = None) -> Path:
     audit_dir.mkdir(parents=True, exist_ok=True)
     path = audit_dir / ARTIFACT_PATHS["BLOCKED_COMMANDS_ATTEMPTS"]
-    existing = {"schema_version": "1.0", "attempts": []}
-    if path.exists():
-        existing = json.loads(path.read_text(encoding="utf-8"))
     attempt = BlockedCommandAttempt(
         command=decision.command,
         origin=decision.origin,
@@ -174,9 +229,20 @@ def append_blocked_attempt(audit_dir: Path, decision: CommandDecision, evidence_
         policy_rule=decision.policy_rule,
         evidence_ids=evidence_ids or [],
         redacted_args=["<redacted>" if "token" in item.lower() else item for item in decision.command],
+        attempt_id=attempt_id,
     )
-    existing.setdefault("attempts", []).append(asdict(attempt))
-    path.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    attempt_payload = asdict(attempt)
+    with _blocked_attempt_lock(path):
+        existing = {"schema_version": "1.0", "attempts": []}
+        if path.exists():
+            existing = json.loads(read_text_auto_capped(path, encoding="utf-8", label="blocked attempts"))
+        attempts = existing.setdefault("attempts", [])
+        duplicate_event = bool(attempt_id) and any(isinstance(item, dict) and item.get("attempt_id") == attempt_id for item in attempts)
+        if not duplicate_event:
+            attempts.append(attempt_payload)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+        tmp.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp.replace(path)
     return path
 
 

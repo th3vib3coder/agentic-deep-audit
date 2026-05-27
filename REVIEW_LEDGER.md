@@ -1,6 +1,6 @@
 # Agentic Deep Audit Review Ledger
 
-Status: R6 remediation implemented; external review pending.
+Status: R7 remediation implemented locally; external review pending.
 
 Sources: `../../piano_doc/013_ledger.md`, `../../piano_doc/implementazione/001_seq_gate_hook_and_repo_discipline.md`.
 
@@ -12,6 +12,44 @@ Validation: no sequence row can move from pending to ACCEPT without independent 
 
 Archive: `REVIEW_LEDGER_ARCHIVE_001.md` preserves SEQ-014 and earlier HAT 2 rows.
 Archive: `REVIEW_LEDGER_ARCHIVE_002.md` preserves SEQ-015 through SEQ-023.
+
+## R7 - External R6.2 Redirect Remediation
+
+Author: Codex.
+Reviewer prompts: Noether/REC-01 depth, Hopper/capped reads, Lamarr/Tier-1 hook-token-markdown.
+Tool-assigned reviewer nicknames: Pasteur, Erdos, Volta.
+Gate: external R6.2 `REDIRECT`; no self-ACCEPT issued.
+Commands:
+
+- R6 preservation commit: `git commit -m "Harden agentic deep audit R6 remediation"` -> `e647c38`.
+- R7 targeted suite: `python -m pytest tests/test_evidence_byte_ranges.py tests/test_pre_tool_policy.py tests/test_manifest_parsing.py tests/test_synthesis.py tests/test_performance_quality.py -q` -> 73 passed.
+- R7 clean full suite: `git clean -fdx` generated caches, then `python -m pytest tests -q` -> 361 passed, 1 skipped.
+- `python -m compileall -q src hooks tests` -> OK.
+- `python -m pytest tests --collect-only -q -p no:cacheprovider` -> 362 tests collected.
+- `git diff --check` -> OK.
+
+Reviewer redirects:
+
+- R6-BLK-01/P1: REC-01 false closure; cross-artifact evidence and provenance secret walkers used pure recursion without depth budget.
+- R6-BLK-02/P1: `sync_evidence_identity_from_provenance` read `EVIDENCE_INDEX.json` through raw `Path.read_text`.
+- R6-OPEN-01/P1: synthesis Markdown cells did not strip full zero-width/bidi Unicode categories.
+- R6-OPEN-02/P2: quality signal awarded a free risk point for an empty findings array.
+- R6-MISS-01/P2: duplicate dual-shell hook events could double-append blocked command attempts without locking.
+- R6-MISS-03/P2: manifest and hook command tokenization diverged for unbalanced quotes.
+- Hopper grep expansion: several runtime artifact JSON/Markdown readers duplicated raw read patterns.
+
+Remediation:
+
+- Replaced recursive evidence-id and secret-path walkers with stack traversal and explicit depth budgets; added shallow-preservation and depth-limit regressions.
+- Routed evidence identity sync through capped/BOM-aware reading and added a monkeypatch regression proving the capped reader is used.
+- Added capped JSON/text helpers and routed runtime loaders, validators, MCP/corpus/wiki/report paths, provenance Git metadata files and adapter/tool-status appenders through capped reads where they consume audit or target-controlled files.
+- Centralized Markdown table-cell cleaning for Unicode control/format removal, fake `ev-*` neutralization and table metacharacter escaping; applied it to synthesis, manifest, quality, reuse and wiki surfaces.
+- Added shared shell tokenization for manifest and hook command parsing, preserving invalid unbalanced quotes as `__invalid_command__`.
+- Hardened `BLOCKED_COMMANDS_ATTEMPTS.json` append with event-scoped deduplication, lock handling, stale-lock cleanup and atomic replace; repeated same-command attempts remain preserved.
+- Removed the empty-risk free point in the quality score.
+
+Review verdict: REDIRECT remediated locally; awaiting independent external ACCEPT.
+Status: external review pending.
 
 ## R6 - External Redirect Remediation
 

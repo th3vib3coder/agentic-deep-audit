@@ -14,7 +14,9 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
+from .sanitize import clean_markdown_text
 
 
 ROOT_PAGES = [
@@ -52,7 +54,7 @@ MAX_DECISION_DOC_BYTES = 1_000_000
 def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="wiki input")
 
 
 def available_evidence(audit_dir: Path) -> set[str]:
@@ -77,10 +79,9 @@ def stable_slug(value: str) -> str:
 
 
 def markdown_text(value: Any) -> str:
-    text = str(value)
-    text = "".join(char for char in text if char not in MARKDOWN_INVISIBLE_CHARS and not (0xE0000 <= ord(char) <= 0xE007F))
-    text = "".join(char for char in text if char in {"\n", "\t"} or ord(char) >= 32)
-    return html.escape(text, quote=False).replace("|", "\\|")
+    text = html.escape(clean_markdown_text(value), quote=False)
+    text = re.sub(r"\bev-(\d{6,})\b", r"ev\\-\1", text)
+    return text.replace("|", "\\|")
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -400,7 +401,11 @@ def table_rows(path: Path) -> list[list[str]]:
     if not path.exists():
         return []
     rows: list[list[str]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="wiki table input")
+    except (OSError, FileSizeLimitError):
+        return []
+    for line in text.splitlines():
         if not line.startswith("|") or "---" in line:
             continue
         cells = split_markdown_row(line)
@@ -478,8 +483,12 @@ def decision_paths(audit_dir: Path) -> list[tuple[str, list[str]]]:
         marker = False
         if path_value.lower().startswith("docs/decisions/") or "adr" in name or "decision" in name or name == "architecture.md":
             marker = True
-        elif name == "changelog.md" and marker_path.stat().st_size <= MAX_DECISION_DOC_BYTES:
-            marker = bool(DECISION_MARKER.search(marker_path.read_text(encoding="utf-8", errors="replace")))
+        elif name == "changelog.md":
+            try:
+                marker_text = read_text_auto_capped(marker_path, encoding="utf-8", errors="replace", max_bytes=MAX_DECISION_DOC_BYTES, label="decision marker")
+            except (OSError, FileSizeLimitError):
+                marker_text = ""
+            marker = bool(DECISION_MARKER.search(marker_text))
         if marker:
             results.append((path_value, evidence.get(path_value, [])))
     return sorted(results, key=lambda item: item[0])

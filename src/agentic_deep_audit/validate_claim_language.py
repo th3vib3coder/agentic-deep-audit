@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .limits import FileSizeLimitError, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -32,7 +33,12 @@ def validate_anti_overclaim_language(audit_dir: Path) -> list[str]:
         path = audit_dir / relative
         if not path.exists():
             continue
-        for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+        try:
+            text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="claim language")
+        except (OSError, FileSizeLimitError) as exc:
+            errors.append(f"anti_overclaim: {relative}: invalid artifact: {exc}")
+            continue
+        for number, line in enumerate(text.splitlines(), start=1):
             if line_is_scoped(line):
                 continue
             if any(pattern.search(line) for pattern in ABSOLUTE_PATTERNS):

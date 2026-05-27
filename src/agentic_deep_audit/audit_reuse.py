@@ -10,7 +10,9 @@ from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
 from .config import canonicalize_target_context
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
+from .sanitize import markdown_table_cell
 
 
 DECISIONS = {"adopt", "adapt", "study", "avoid"}
@@ -45,11 +47,11 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="reuse input")
 
 
 def markdown_cell(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip().replace("|", "\\|")
+    return markdown_table_cell(value)
 
 
 def target_context_from(run_config: dict[str, Any]) -> dict[str, Any]:
@@ -145,7 +147,11 @@ def build_cards(run_config: dict[str, Any], audit_dir: Path) -> dict[str, Any]:
     risk_findings = load_json(audit_dir / ARTIFACT_PATHS["RISK_FINDINGS"])
     suspicious = load_json(audit_dir / ARTIFACT_PATHS["SUSPICIOUS_BEHAVIORS"])
     binary_artifacts = load_json(audit_dir / ARTIFACT_PATHS["BINARY_ARTIFACTS"])
-    coverage_text = (audit_dir / ARTIFACT_PATHS["TEST_COVERAGE_SIGNAL"]).read_text(encoding="utf-8") if (audit_dir / ARTIFACT_PATHS["TEST_COVERAGE_SIGNAL"]).exists() else ""
+    coverage_path = audit_dir / ARTIFACT_PATHS["TEST_COVERAGE_SIGNAL"]
+    try:
+        coverage_text = read_text_auto_capped(coverage_path, encoding="utf-8", errors="replace", label="coverage signal") if coverage_path.exists() else ""
+    except (OSError, FileSizeLimitError):
+        coverage_text = ""
     performance_text_present = (audit_dir / ARTIFACT_PATHS["PERFORMANCE_REVIEW"]).exists()
     target_context = target_context_from(run_config)
     license_info = license_summary(license_cards, target_context)

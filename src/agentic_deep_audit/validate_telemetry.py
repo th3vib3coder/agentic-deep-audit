@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -26,8 +27,8 @@ EXPECTED_CATEGORIES = {
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="telemetry validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None
     if not isinstance(payload, dict):
@@ -77,7 +78,11 @@ def validate_project_telemetry_artifacts(audit_dir: Path, evidence_index: dict[s
     if not report_path.exists():
         errors.append(f"missing required project telemetry report: {report_path}")
         return errors
-    text = report_path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(report_path, encoding="utf-8", errors="replace", label="telemetry report").replace("\r\n", "\n").replace("\r", "\n")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"PROJECT_TELEMETRY.md invalid artifact: {exc}")
+        return errors
     headings = re.findall(r"^##\s+(.+)$", text, flags=re.MULTILINE)
     if sorted(headings) != sorted(categories):
         errors.append("PROJECT_TELEMETRY.md section categories do not match PROJECT_TELEMETRY.json records")

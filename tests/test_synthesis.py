@@ -12,7 +12,7 @@ from agentic_deep_audit.audit_graph import run_graph
 from agentic_deep_audit.audit_inventory import run_inventory
 from agentic_deep_audit.audit_manifest import run_manifest
 from agentic_deep_audit.audit_surface import run_surface
-from agentic_deep_audit.audit_synthesis import decision_doc_questions, run_synthesis
+from agentic_deep_audit.audit_synthesis import decision_doc_questions, markdown_cell, run_synthesis
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.bootstrap import bootstrap_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
@@ -124,6 +124,15 @@ def test_synthesis_escapes_markdown_table_cells_before_graph_promotion(tmp_path:
     assert "evil \\| injected" in feature_text
     assert "src/app.py \\| phantom" in feature_text
     assert "src/app.py | phantom" not in feature_text
+
+
+def test_markdown_cell_strips_zero_width_and_bidi_categories() -> None:
+    cell = markdown_cell("ev-\u061c999999\u202e | visible\u200b")
+
+    assert cell == "ev\\-999999 \\| visible"
+    assert "\u061c" not in cell
+    assert "\u202e" not in cell
+    assert "\u200b" not in cell
 
 
 def test_synthesis_validation_rejects_broken_markdown_and_json_evidence(tmp_path: Path) -> None:

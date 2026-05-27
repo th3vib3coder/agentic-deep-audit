@@ -88,6 +88,18 @@ def test_quality_score_does_not_award_free_point_without_risk_review() -> None:
     assert "Evidence-weighted quality signal: 1/5." in text
 
 
+def test_quality_score_does_not_award_free_point_for_empty_risk_findings() -> None:
+    text = quality_markdown(
+        {"records": [{"path": "README.md", "kind": "docs"}]},
+        {},
+        {"records": []},
+        {"schema_version": "1.0", "findings": []},
+        {"test_files": [], "ci_commands": 0, "numeric_coverage": [], "coverage_files": []},
+    )
+
+    assert "Evidence-weighted quality signal: 1/5." in text
+
+
 def test_coverage_signal_ignores_out_of_range_coverage_percent(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

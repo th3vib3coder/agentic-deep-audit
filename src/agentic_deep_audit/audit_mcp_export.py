@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters.base import AdapterStatus, append_tool_status
+from .limits import FileSizeLimitError, read_json_capped
 from .mcp_collision_check import GENERATED_SERVER_NAME, GENERATED_TOOL_NAMES, read_host_mcp_state
 from .mcp_policy import redact_value
 from .models import ARTIFACT_PATHS
@@ -15,8 +16,8 @@ from .validate_corpus import validate_corpus_artifacts
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = read_json_capped(path, label="mcp export input")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
 

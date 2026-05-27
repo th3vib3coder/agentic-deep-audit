@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
@@ -14,9 +13,10 @@ from typing import Any
 from defusedxml import ElementTree as DefusedET
 from defusedxml.common import DefusedXmlException
 
-from .limits import FileSizeLimitError, MAX_MANIFEST_FILE_BYTES, read_text_capped
+from .limits import FileSizeLimitError, MAX_MANIFEST_FILE_BYTES, read_json_capped, read_text_capped
 from .models import ARTIFACT_PATHS
-from .policy import decide_command
+from .policy import command_tokens_from_text, decide_command
+from .sanitize import markdown_table_cell
 
 
 MANIFEST_FILENAMES = {
@@ -53,7 +53,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="manifest input")
 
 
 def evidence_by_path(audit_dir: Path) -> dict[str, str]:
@@ -62,11 +62,7 @@ def evidence_by_path(audit_dir: Path) -> dict[str, str]:
 
 
 def command_tokens(command: str) -> list[str]:
-    try:
-        tokens = shlex.split(command, posix=True)
-    except ValueError:
-        tokens = [command.strip()] if command.strip() else []
-    return tokens or [command]
+    return command_tokens_from_text(command, posix=True)
 
 
 def read_manifest_text(path: Path, *, errors: str | None = None) -> str:
@@ -378,7 +374,19 @@ def build_test_map_markdown(manifests: list[dict[str, Any]], ci: list[dict[str, 
     if not rows:
         lines.append("|  |  |  |  | observed, not executed |")
     for command in rows:
-        lines.append(f"| {command['source']} | {command['category']} | `{command['command']}` | {command['policy_rule']} | {command['label']} |")
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    markdown_table_cell(command["source"]),
+                    markdown_table_cell(command["category"]),
+                    markdown_table_cell(command["command"], max_chars=800),
+                    markdown_table_cell(command["policy_rule"]),
+                    markdown_table_cell(command["label"]),
+                ]
+            )
+            + " |"
+        )
     lines.append("")
     return "\n".join(lines)
 

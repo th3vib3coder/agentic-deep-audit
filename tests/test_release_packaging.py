@@ -213,7 +213,7 @@ def test_release_checklist_commands_have_expected_conditions() -> None:
     assert rows
     for command in [
         "pytest tests -q",
-        "351 collected tests",
+        "362 collected tests",
         "test_release_packaging.py",
         "run_smoke_tests.py",
         "test_pre_tool_policy.py",

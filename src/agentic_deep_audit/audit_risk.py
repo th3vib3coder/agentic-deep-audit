@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
-from .limits import FileSizeLimitError, read_text_auto_capped
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 from .sanitize import sanitize_markdown
 
@@ -24,7 +24,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="risk input")
 
 
 def repo_path_from(file_index: dict[str, Any], run_config: dict[str, Any]) -> Path:

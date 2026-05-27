@@ -81,6 +81,23 @@ def detection_text(markdown_text: str) -> str:
     return "".join(char for char in normalized if char not in INVISIBLE_CHARS and not (0xE0000 <= ord(char) <= 0xE007F))
 
 
+def clean_markdown_text(value: object, max_chars: int = 300) -> str:
+    text = str(value or "")
+    text = "".join(
+        char
+        for char in text
+        if char in {"\n", "\t"}
+        or (unicodedata.category(char) not in {"Cc", "Cf"} and char not in INVISIBLE_CHARS and not (0xE0000 <= ord(char) <= 0xE007F))
+    )
+    return text[:max_chars]
+
+
+def markdown_table_cell(value: object, max_chars: int = 300) -> str:
+    text = re.sub(r"\s+", " ", clean_markdown_text(value, max_chars)).strip()
+    text = text.replace("\\", "\\\\").replace("|", "\\|").replace("`", "\\`").replace("\n", " ")
+    return re.sub(r"\bev-(\d{6,})\b", r"ev\\-\1", text)
+
+
 def sanitize_markdown(path: str, markdown_text: str, start_byte: int = 0, evidence_id: str | None = None) -> SanitizedMarkdown:
     flags: list[dict[str, object]] = []
     for kind, pattern in BLOCK_PATTERNS.items():

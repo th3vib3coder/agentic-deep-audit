@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -15,8 +16,8 @@ PHASE_NAMES = {"bootstrap", "inventory", "provenance", "manifest", "graph", "sur
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="quality validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None
     if not isinstance(payload, dict):
@@ -30,7 +31,11 @@ def available_evidence(evidence_index: dict[str, Any]) -> set[str]:
 
 
 def validate_markdown_evidence(path: Path, available: set[str], errors: list[str]) -> None:
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="quality markdown")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"{path.name} invalid markdown artifact: {exc}")
+        return
     for evidence_id in re.findall(r"ev-\d{6,}", text):
         if evidence_id not in available:
             errors.append(f"{path.name} references unreachable evidence id: {evidence_id}")
@@ -41,7 +46,11 @@ def validate_performance_report(audit_dir: Path, available: set[str], errors: li
     if not path.exists():
         errors.append(f"missing required performance artifact: {path}")
         return
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="performance report")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"PERFORMANCE_REVIEW.md invalid artifact: {exc}")
+        return
     validate_markdown_evidence(path, available, errors)
     lowered = text.lower()
     if "audited project performance" not in lowered:
@@ -59,7 +68,11 @@ def validate_quality_report(audit_dir: Path, errors: list[str]) -> None:
     if not path.exists():
         errors.append(f"missing required quality artifact: {path}")
         return
-    text = path.read_text(encoding="utf-8").lower()
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="quality report").lower()
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"QUALITY_REVIEW.md invalid artifact: {exc}")
+        return
     if "evidence-weighted quality signal" not in text or "not a production readiness score" not in text:
         errors.append("QUALITY_REVIEW.md missing evidence caveat")
 
@@ -69,7 +82,11 @@ def validate_test_coverage_signal(audit_dir: Path, errors: list[str]) -> None:
     if not path.exists():
         errors.append(f"missing required test coverage artifact: {path}")
         return
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="test coverage signal")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"TEST_COVERAGE_SIGNAL.md invalid artifact: {exc}")
+        return
     lowered = text.lower()
     if "no runtime coverage percentage is claimed unless a coverage artifact is present" not in lowered:
         errors.append("TEST_COVERAGE_SIGNAL.md missing no-invented-coverage caveat")

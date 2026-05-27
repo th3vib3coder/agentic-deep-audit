@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .limits import FileSizeLimitError, read_json_capped
 from .mcp_policy import redact_value
 
 
@@ -100,8 +101,8 @@ def read_host_mcp_state(run_config: dict[str, Any]) -> dict[str, Any]:
         if not path.exists():
             return {"state": "unknown", "reason": f"host MCP config not readable: {safe_path_text(path)}", "hosts": hosts, "collisions": []}
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            payload = read_json_capped(path, label="host MCP config")
+        except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
             return {"state": "unknown", "reason": f"host MCP config parse failed: {safe_path_text(path)}: {type(exc).__name__}", "hosts": hosts, "collisions": []}
         if not isinstance(payload, dict):
             return {"state": "unknown", "reason": f"host MCP config root is not object: {safe_path_text(path)}", "hosts": hosts, "collisions": []}

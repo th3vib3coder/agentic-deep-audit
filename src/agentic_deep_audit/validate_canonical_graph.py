@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit_canonical_graph import EDGE_TYPES, NODE_TYPES, stable_slug
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -18,8 +19,8 @@ DERIVED_WIKI_PAGES = {"wiki/005_graph_mermaid.md"}
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="graph validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid graph JSON artifact: {path}: {exc}")
         return {}
     if not isinstance(payload, dict):
@@ -113,8 +114,14 @@ def validate_renderer_artifacts(audit_dir: Path, errors: list[str]) -> None:
         errors.append("graph renderer emitted both graph.html and GRAPH_HTML_SKIPPED.md")
     if not html.exists() and not skipped.exists():
         errors.append("graph renderer requires graph/graph.html or root GRAPH_HTML_SKIPPED.md")
-    if skipped.exists() and "Reason:" not in skipped.read_text(encoding="utf-8"):
-        errors.append("GRAPH_HTML_SKIPPED.md missing Reason")
+    if skipped.exists():
+        try:
+            skipped_text = read_text_auto_capped(skipped, encoding="utf-8", errors="replace", label="graph renderer skipped")
+        except (OSError, FileSizeLimitError) as exc:
+            errors.append(f"GRAPH_HTML_SKIPPED.md invalid artifact: {exc}")
+            skipped_text = ""
+        if "Reason:" not in skipped_text:
+            errors.append("GRAPH_HTML_SKIPPED.md missing Reason")
 
 
 def validate_graphify_artifacts(audit_dir: Path, errors: list[str]) -> None:
@@ -124,8 +131,14 @@ def validate_graphify_artifacts(audit_dir: Path, errors: list[str]) -> None:
     graphify_graph = audit_dir / ARTIFACT_PATHS["GRAPHIFY_GRAPH"]
     if not skipped.exists() and not graphify_graph.exists():
         errors.append("Graphify requires root GRAPHIFY_SKIPPED.md or graphify/graph.json")
-    if skipped.exists() and "Reason:" not in skipped.read_text(encoding="utf-8"):
-        errors.append("GRAPHIFY_SKIPPED.md missing Reason")
+    if skipped.exists():
+        try:
+            skipped_text = read_text_auto_capped(skipped, encoding="utf-8", errors="replace", label="graphify skipped")
+        except (OSError, FileSizeLimitError) as exc:
+            errors.append(f"GRAPHIFY_SKIPPED.md invalid artifact: {exc}")
+            skipped_text = ""
+        if "Reason:" not in skipped_text:
+            errors.append("GRAPHIFY_SKIPPED.md missing Reason")
     if graphify_graph.exists() and not (audit_dir / ARTIFACT_PATHS["GRAPHIFY_REPORT"]).exists():
         errors.append("graphify/GRAPH_REPORT.md required when graphify/graph.json exists")
 
@@ -143,7 +156,11 @@ def validate_graphify_diff(audit_dir: Path, graph: dict[str, Any], errors: list[
     if not diff_path.exists():
         errors.append("graphify/GRAPHIFY_DIFF.md required when Graphify graph differs from canonical graph")
         return
-    text = diff_path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(diff_path, encoding="utf-8", errors="replace", label="graphify diff")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"graphify/GRAPHIFY_DIFF.md invalid artifact: {exc}")
+        return
     if canonical_hash not in text or graphify_hash not in text:
         errors.append("graphify/GRAPHIFY_DIFF.md must include canonical and Graphify graph hashes")
 
@@ -227,7 +244,11 @@ def markdown_row_labels(path: Path) -> list[str]:
         return []
     labels: list[str] = []
     header_consumed = False
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="canonical markdown rows")
+    except (OSError, FileSizeLimitError):
+        return []
+    for line in text.splitlines():
         if not line.startswith("|"):
             continue
         cells = split_markdown_row(line)

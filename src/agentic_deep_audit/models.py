@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .limits import read_json_capped
 from .resources import SOURCE_PLUGIN_ROOT, schema_dir
 
 
@@ -168,7 +169,7 @@ def load_schema_registry(schema_dir: Path | None = None) -> dict[str, SchemaReco
     for name, filename in SCHEMA_FILES.items():
         path = schema_root / filename
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = read_json_capped(path, label="schema registry")
         except Exception as exc:  # noqa: BLE001 - preserve path/schema name in error.
             raise SchemaRegistryError(f"{name}: failed to load {path}: {exc}") from exc
         try:

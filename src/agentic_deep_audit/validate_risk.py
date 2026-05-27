@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from .audit_risk import AGENTIC_CODES, BEHAVIOR_KINDS, SUPPLY_SIGNALS
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="risk validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None
     if not isinstance(payload, dict):
@@ -108,7 +109,11 @@ def validate_agentic(audit_dir: Path, available: set[str], errors: list[str]) ->
     if not report_path.exists():
         errors.append(f"missing required agentic security report: {report_path}")
         return
-    text = report_path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(report_path, encoding="utf-8", errors="replace", label="agentic security report")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"AGENTIC_SECURITY.md invalid artifact: {exc}")
+        return
     for item in payload.get("scanned_files") or []:
         if isinstance(item, dict) and item.get("path") and str(item["path"]) not in text:
             errors.append(f"AGENTIC_SECURITY.md missing scanned file: {item['path']}")
@@ -121,7 +126,11 @@ def validate_supply_chain(audit_dir: Path, errors: list[str]) -> None:
     path = audit_dir / ARTIFACT_PATHS["SUPPLY_CHAIN_SIGNALS"]
     if not path.exists():
         return
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="supply chain report")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"SUPPLY_CHAIN_SIGNALS.md invalid artifact: {exc}")
+        return
     for signal in SUPPLY_SIGNALS:
         if f"| {signal} |" not in text:
             errors.append(f"SUPPLY_CHAIN_SIGNALS.md missing signal row: {signal}")
@@ -136,7 +145,11 @@ def validate_risk_report(audit_dir: Path, errors: list[str]) -> None:
     path = audit_dir / ARTIFACT_PATHS["RISK_REPORT"]
     if not path.exists():
         return
-    text = path.read_text(encoding="utf-8").lower()
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="risk report").lower()
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"RISK_REPORT.md invalid artifact: {exc}")
+        return
     if "cannot claim absence of vulnerabilities" not in text:
         errors.append("RISK_REPORT.md must state it cannot claim absence of vulnerabilities")
     if "tools skipped" not in text:

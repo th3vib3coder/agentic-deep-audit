@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .base import AdapterError, ToolAdapter
+from ..limits import FileSizeLimitError, read_json_capped
 
 
 CORE_CLASS = "core"
@@ -40,8 +41,8 @@ def load_adapter_decision(plugin_root: Path, adapter_id: str) -> AdapterDecision
     if not path.exists():
         raise AdapterBlockedPrePromotion(f"adapter_blocked_pre_promotion: missing decision JSON for {adapter_id}")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        payload = read_json_capped(path, label="adapter decision JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         raise AdapterBlockedPrePromotion(f"adapter_blocked_pre_promotion: invalid decision JSON for {adapter_id}: {exc}") from exc
     try:
         validate_adapter_decision_payload(payload)

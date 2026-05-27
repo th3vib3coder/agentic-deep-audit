@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .audit_wiki import ROOT_PAGES, selected_module_slugs
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -27,8 +28,8 @@ OBSIDIAN_LINK = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="wiki validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -123,8 +124,12 @@ def type_matches_directory(relative: str, page_type: str) -> bool:
 
 
 def validate_page(audit_dir: Path, path: Path, available_evidence: set[str], errors: list[str]) -> None:
-    text = path.read_text(encoding="utf-8")
     relative = path.relative_to(audit_dir).as_posix()
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", label="wiki page").replace("\r\n", "\n").replace("\r", "\n")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"{relative} invalid wiki page: {exc}")
+        return
     front = parse_frontmatter(path, text, errors)
     validate_frontmatter_types(audit_dir, path, front, errors)
     page_type = str(front.get("type") or "")
@@ -175,7 +180,11 @@ def validate_frontmatter_types(audit_dir: Path, path: Path, front: dict[str, Any
 
 def module_page_has_valid_evidence(audit_dir: Path, path: Path, available_evidence: set[str]) -> bool:
     local_errors: list[str] = []
-    front = parse_frontmatter(path, path.read_text(encoding="utf-8"), local_errors)
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", label="wiki page").replace("\r\n", "\n").replace("\r", "\n")
+    except (OSError, FileSizeLimitError):
+        return False
+    front = parse_frontmatter(path, text, local_errors)
     validate_frontmatter_types(audit_dir, path, front, local_errors)
     evidence_ids = front.get("evidence_ids")
     return (
@@ -215,10 +224,17 @@ def validate_wiki_artifacts(audit_dir: Path, evidence_index: dict[str, Any]) -> 
     decision_pages = [path for path in (root / "decisions").glob("*.md") if path.name != "index.md"] if (root / "decisions").exists() else []
     if not decision_pages:
         errors.append("wiki decisions requires at least one decision page or skipped/open-question page")
-    elif all("skipped:" not in path.read_text(encoding="utf-8", errors="replace") for path in decision_pages):
-        # Real decision pages carry evidence; the skipped fallback must be explicit when no evidence is present.
-        if not any(re.search(r"ev-\d{6,}", path.read_text(encoding="utf-8", errors="replace")) for path in decision_pages):
-            errors.append("wiki decisions pages require evidence or explicit skipped note")
+    else:
+        decision_texts: list[str] = []
+        for path in decision_pages:
+            try:
+                decision_texts.append(read_text_auto_capped(path, encoding="utf-8", errors="replace", label="wiki decision page").replace("\r\n", "\n").replace("\r", "\n"))
+            except (OSError, FileSizeLimitError) as exc:
+                errors.append(f"{path.relative_to(audit_dir).as_posix()} invalid decision page: {exc}")
+        if decision_texts and all("skipped:" not in text for text in decision_texts):
+            # Real decision pages carry evidence; the skipped fallback must be explicit when no evidence is present.
+            if not any(re.search(r"ev-\d{6,}", text) for text in decision_texts):
+                errors.append("wiki decisions pages require evidence or explicit skipped note")
     available = {str(item.get("id")) for item in evidence_index.get("evidence", []) if isinstance(item, dict) and item.get("id")}
     for path in wiki_pages(audit_dir):
         validate_page(audit_dir, path, available, errors)

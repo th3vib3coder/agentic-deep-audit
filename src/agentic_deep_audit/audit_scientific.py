@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .limits import FileSizeLimitError, read_text_auto_capped
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -19,7 +19,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_capped(path, label="scientific input")
 
 
 def evidence_by_path(audit_dir: Path) -> dict[str, str]:

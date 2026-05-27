@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import sha256_file
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS, PLUGIN_ROOT
 from .resources import template_dir
 
@@ -63,6 +64,7 @@ COMPLETION_ALTERNATIVES = [
     ["SBOM", "SBOM_SKIPPED"],
     ["MCP_CONFIG", "MCP_DEFERRED", "MCP_COLLISION_REPORT"],
 ]
+MAX_REPORT_WALK_DEPTH = 256
 SECRET_ARTIFACT_PATTERNS = (
     ".env",
     ".env.*",
@@ -80,7 +82,7 @@ SECRET_ARTIFACT_PATTERNS = (
 def read_text(path: Path) -> str:
     if not path.exists():
         return ""
-    return path.read_text(encoding="utf-8", errors="replace")
+    return read_text_auto_capped(path, encoding="utf-8", errors="replace", label="report input")
 
 
 def load_optional_json(audit_dir: Path, key: str) -> dict[str, Any]:
@@ -88,8 +90,8 @@ def load_optional_json(audit_dir: Path, key: str) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        payload = read_json_capped(path, label="report JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
 
@@ -114,8 +116,8 @@ def validation_passed(audit_dir: Path) -> bool:
     if not structured_path.exists():
         return False
     try:
-        payload = json.loads(structured_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        payload = read_json_capped(structured_path, label="validation report JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError):
         return False
     return payload.get("status") == "pass" and payload.get("blocker_count") == 0
 
@@ -178,8 +180,8 @@ def low_confidence_records(audit_dir: Path) -> list[str]:
     findings: list[str] = []
     for path in sorted(audit_dir.rglob("*.json")):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+            payload = read_json_capped(path, label="report low-confidence JSON")
+        except (OSError, FileSizeLimitError, json.JSONDecodeError):
             continue
         walk_low_confidence(payload, path.relative_to(audit_dir).as_posix(), "$", findings)
         if len(findings) >= 25:
@@ -188,16 +190,21 @@ def low_confidence_records(audit_dir: Path) -> list[str]:
 
 
 def walk_low_confidence(value: Any, artifact: str, location: str, findings: list[str]) -> None:
-    if len(findings) >= 25:
-        return
-    if isinstance(value, dict):
-        if str(value.get("confidence", "")).lower() == "low":
-            findings.append(f"{artifact}:{location}")
-        for key, child in value.items():
-            walk_low_confidence(child, artifact, f"{location}.{key}", findings)
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            walk_low_confidence(child, artifact, f"{location}[{index}]", findings)
+    stack: list[tuple[Any, str, int]] = [(value, location, 0)]
+    while stack and len(findings) < 25:
+        current, current_location, depth = stack.pop()
+        if depth > MAX_REPORT_WALK_DEPTH:
+            continue
+        if isinstance(current, dict):
+            if str(current.get("confidence", "")).lower() == "low":
+                findings.append(f"{artifact}:{current_location}")
+                if len(findings) >= 25:
+                    break
+            for key, child in reversed(list(current.items())):
+                stack.append((child, f"{current_location}.{key}", depth + 1))
+        elif isinstance(current, list):
+            for index in range(len(current) - 1, -1, -1):
+                stack.append((current[index], f"{current_location}[{index}]", depth + 1))
 
 
 def completion_missing_artifacts(audit_dir: Path) -> list[str]:
@@ -523,7 +530,7 @@ def refresh_open_question_dependents(audit_dir: Path) -> None:
     run_config_path = audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]
     if not run_config_path.exists():
         return
-    run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+    run_config = read_json_capped(run_config_path, label="run config")
     if (audit_dir / "wiki").exists():
         from .audit_wiki import run_wiki
 

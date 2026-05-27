@@ -28,6 +28,9 @@ def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
     except FileSizeLimitError as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None
+    except RecursionError as exc:
+        errors.append(f"invalid JSON artifact: {path}: exceeds JSON depth budget while parsing: {exc}")
+        return None
     except json.JSONDecodeError as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None

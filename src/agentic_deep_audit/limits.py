@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
+from typing import Any
 
 
 MAX_AUDIT_FILE_BYTES = 25_000_000
@@ -12,6 +14,10 @@ MAX_MANIFEST_FILE_BYTES = 1_000_000
 
 class FileSizeLimitError(ValueError):
     """Raised when an untrusted file exceeds the configured audit read cap."""
+
+
+class JsonDepthLimitError(FileSizeLimitError):
+    """Raised when JSON parsing exceeds the interpreter nesting limit."""
 
 
 def ensure_file_size(path: Path, max_bytes: int, label: str) -> int:
@@ -58,6 +64,13 @@ def read_text_auto_capped(
     label: str = "file",
 ) -> str:
     return decode_text_bytes(read_bytes_capped(path, max_bytes, label), encoding=encoding, errors=errors)
+
+
+def read_json_capped(path: Path, *, max_bytes: int = MAX_AUDIT_FILE_BYTES, label: str = "json artifact") -> Any:
+    try:
+        return json.loads(read_text_auto_capped(path, encoding="utf-8", max_bytes=max_bytes, label=label))
+    except RecursionError as exc:
+        raise JsonDepthLimitError(f"{label} exceeds JSON parser depth budget") from exc
 
 
 def sha256_file_capped(path: Path, max_bytes: int = MAX_AUDIT_FILE_BYTES, label: str = "file") -> str:

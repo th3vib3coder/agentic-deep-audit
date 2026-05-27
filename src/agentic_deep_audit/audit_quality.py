@@ -11,8 +11,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
-from .sanitize import sanitize_markdown
+from .sanitize import markdown_table_cell, sanitize_markdown
 
 
 BENCHMARK_NAMES = {"bench", "benchmark", "benchmarks", "perf", "performance"}
@@ -26,7 +27,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    return read_json_capped(path, label="quality input") if path.exists() else {}
 
 
 def evidence_by_path(audit_dir: Path) -> dict[str, str]:
@@ -45,7 +46,7 @@ def record_path(record: dict[str, Any]) -> str:
 
 
 def markdown_cell(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip().replace("|", "\\|")
+    return markdown_table_cell(value)
 
 
 def top_hot_modules(file_index: dict[str, Any], module_graph: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
@@ -247,7 +248,8 @@ def quality_markdown(file_index: dict[str, Any], ci_map: dict[str, Any], telemet
     risk_reviewed = isinstance(risk.get("findings"), list)
     risk_count = sum(1 for item in risk_findings if isinstance(item, dict) and item.get("status") == "observed")
     observed_telemetry = sum(1 for record in telemetry.get("records", []) if isinstance(record, dict) and record.get("status") == "observed")
-    score_parts = [bool(coverage["test_files"]), bool(coverage["ci_commands"]), bool(lint_configs), docs > 0, risk_reviewed and risk_count == 0]
+    risk_clear_with_evidence = risk_reviewed and bool(risk_findings) and risk_count == 0
+    score_parts = [bool(coverage["test_files"]), bool(coverage["ci_commands"]), bool(lint_configs), docs > 0, risk_clear_with_evidence]
     score = sum(1 for item in score_parts if item)
     return "\n".join([
         "# Quality Review",
@@ -282,7 +284,11 @@ def run_performance_quality(run_config: dict[str, Any], audit_dir: Path) -> None
     ci_map = load_json(audit_dir / ARTIFACT_PATHS["CI_MAP"])
     telemetry = load_json(audit_dir / ARTIFACT_PATHS["PROJECT_TELEMETRY"])
     risk = load_json(audit_dir / ARTIFACT_PATHS["RISK_FINDINGS"])
-    build_test_map = (audit_dir / ARTIFACT_PATHS["BUILD_TEST_MAP"]).read_text(encoding="utf-8") if (audit_dir / ARTIFACT_PATHS["BUILD_TEST_MAP"]).exists() else ""
+    build_test_path = audit_dir / ARTIFACT_PATHS["BUILD_TEST_MAP"]
+    try:
+        build_test_map = read_text_auto_capped(build_test_path, encoding="utf-8", errors="replace", label="build test map") if build_test_path.exists() else ""
+    except (OSError, FileSizeLimitError):
+        build_test_map = ""
     repo_path = repo_path_from(file_index, run_config)
     evidence_lookup = evidence_by_path(audit_dir)
     hot = top_hot_modules(file_index, module_graph)

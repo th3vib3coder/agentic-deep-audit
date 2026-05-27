@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .audit_provenance import GIT_SAFE_CONFIG, git_probe_env, safe_git_executable
+from .limits import read_text_auto_capped
 
 
 PROJECT_SURFACE_PATTERNS: tuple[str, ...] = (
@@ -67,7 +68,7 @@ def extract_current_gate(ledger_text: str) -> str:
 
 
 def read_current_gate(ledger_path: Path) -> str:
-    return extract_current_gate(ledger_path.read_text(encoding="utf-8"))
+    return extract_current_gate(read_text_auto_capped(ledger_path, encoding="utf-8", errors="replace", label="gate ledger"))
 
 
 def decide_path(gate: str, path: str) -> GateDecision:

@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
+from .limits import read_text_auto_capped
 from .models import ARTIFACT_PATHS, RUN_CONFIG, load_schema_registry
 
 
@@ -463,7 +464,7 @@ def normalize_run_config(config: dict[str, Any], overrides: ArgvOverrides, confi
 
 def load_run_config(path: Path, overrides: ArgvOverrides) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        data = json.loads(read_text_auto_capped(path, encoding="utf-8-sig", label="run config"))
     except json.JSONDecodeError as exc:
         raise ConfigError(f"run config parse failed: {path}: {exc}") from exc
     if not isinstance(data, dict):

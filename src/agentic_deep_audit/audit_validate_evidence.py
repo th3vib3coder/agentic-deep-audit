@@ -14,6 +14,9 @@ from .mcp_policy import looks_secret
 from .models import ARTIFACT_PATHS
 
 
+MAX_JSON_TRAVERSAL_DEPTH = 256
+
+
 def read_markdown_artifact(path: Path, errors: list[str], label: str) -> str | None:
     if path.is_symlink():
         errors.append(f"{label}: symlink artifacts are not allowed: {path}")
@@ -189,6 +192,9 @@ def validate_cross_artifact_evidence_references(audit_dir: Path, evidence_index:
         except FileSizeLimitError as exc:
             errors.append(f"{relative} exceeds validation size cap: {exc}")
             continue
+        except RecursionError as exc:
+            errors.append(f"{relative} exceeds validation JSON depth budget while parsing: {exc}")
+            continue
         except json.JSONDecodeError:
             continue
         artifact_name = relative
@@ -196,24 +202,33 @@ def validate_cross_artifact_evidence_references(audit_dir: Path, evidence_index:
     return errors
 
 
-def collect_unreachable_evidence_ids(value: Any, path: str, available: set[str], errors: list[str]) -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            next_path = f"{path}.{key}"
-            if key == "evidence_ids":
-                if not isinstance(item, list):
-                    errors.append(f"{next_path} must be an array")
+def collect_unreachable_evidence_ids(value: Any, path: str, available: set[str], errors: list[str], max_depth: int = MAX_JSON_TRAVERSAL_DEPTH) -> None:
+    stack: list[tuple[Any, str, int]] = [(value, path, 0)]
+    depth_error_paths: set[str] = set()
+    while stack:
+        current, current_path, depth = stack.pop()
+        if depth > max_depth:
+            if current_path not in depth_error_paths:
+                errors.append(f"{current_path} exceeds maximum JSON traversal depth: {max_depth}")
+                depth_error_paths.add(current_path)
+            continue
+        if isinstance(current, dict):
+            for key, item in reversed(list(current.items())):
+                next_path = f"{current_path}.{key}"
+                if key == "evidence_ids":
+                    if not isinstance(item, list):
+                        errors.append(f"{next_path} must be an array")
+                        continue
+                    for evidence_id in item:
+                        if not isinstance(evidence_id, str) or not re.fullmatch(r"ev-\d{6,}", evidence_id):
+                            errors.append(f"{next_path} contains invalid evidence id: {evidence_id!r}")
+                        elif evidence_id not in available:
+                            errors.append(f"{next_path} references unreachable evidence id: {evidence_id}")
                     continue
-                for evidence_id in item:
-                    if not isinstance(evidence_id, str) or not re.fullmatch(r"ev-\d{6,}", evidence_id):
-                        errors.append(f"{next_path} contains invalid evidence id: {evidence_id!r}")
-                    elif evidence_id not in available:
-                        errors.append(f"{next_path} references unreachable evidence id: {evidence_id}")
-                continue
-            collect_unreachable_evidence_ids(item, next_path, available, errors)
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            collect_unreachable_evidence_ids(item, f"{path}[{index}]", available, errors)
+                stack.append((item, next_path, depth + 1))
+        elif isinstance(current, list):
+            for index in range(len(current) - 1, -1, -1):
+                stack.append((current[index], f"{current_path}[{index}]", depth + 1))
 
 
 def is_safe_relative_evidence_path(path_value: str) -> bool:
@@ -265,12 +280,18 @@ def validate_provenance_artifact(audit_dir: Path) -> ValidationResult:
     return ValidationResult(ok=not errors, errors=errors)
 
 
-def collect_secret_paths(value: Any, path: str, results: list[str]) -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            collect_secret_paths(item, f"{path}.{key}", results)
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            collect_secret_paths(item, f"{path}[{index}]", results)
-    elif isinstance(value, str) and looks_secret(value):
-        results.append(path)
+def collect_secret_paths(value: Any, path: str, results: list[str], max_depth: int = MAX_JSON_TRAVERSAL_DEPTH) -> None:
+    stack: list[tuple[Any, str, int]] = [(value, path, 0)]
+    while stack:
+        current, current_path, depth = stack.pop()
+        if depth > max_depth:
+            results.append(f"{current_path} <depth-limit:{max_depth}>")
+            continue
+        if isinstance(current, dict):
+            for key, item in reversed(list(current.items())):
+                stack.append((item, f"{current_path}.{key}", depth + 1))
+        elif isinstance(current, list):
+            for index in range(len(current) - 1, -1, -1):
+                stack.append((current[index], f"{current_path}[{index}]", depth + 1))
+        elif isinstance(current, str) and looks_secret(current):
+            results.append(current_path)

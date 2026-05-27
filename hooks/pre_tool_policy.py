@@ -6,7 +6,6 @@ import argparse
 import json
 import os
 import subprocess
-import shlex
 import sys
 from pathlib import Path
 
@@ -52,10 +51,11 @@ if SRC_ROOT.exists():
     sys.path.insert(0, str(SRC_ROOT))
 
 try:
-    from agentic_deep_audit.policy import append_blocked_attempt, decide_command
+    from agentic_deep_audit.policy import append_blocked_attempt, blocked_attempt_event_id, command_tokens_from_text, decide_command
 except Exception as exc:  # noqa: BLE001 - hook boundary must fail closed with a clear token.
     IMPORT_ERROR = exc
     append_blocked_attempt = None
+    blocked_attempt_event_id = None
     decide_command = None
 else:
     IMPORT_ERROR = None
@@ -111,10 +111,7 @@ def command_from_event(event: dict) -> list[str]:
     command = tool_input.get("command")
     if not isinstance(command, str) or not command.strip():
         return []
-    try:
-        return shlex.split(command, posix=os.name != "nt")
-    except ValueError:
-        return ["__invalid_command__"]
+    return command_tokens_from_text(command, posix=os.name != "nt")
 
 
 def mcp_verb(tool_name: str) -> str:
@@ -139,7 +136,7 @@ def audit_dir_from_event(event: dict) -> Path:
     return Path(cwd) / "audit"
 
 
-def run_decision(command: list[str], origin: str, audit_dir: Path, block_code: int = 1, strict_runtime: bool = False) -> int:
+def run_decision(command: list[str], origin: str, audit_dir: Path, block_code: int = 1, strict_runtime: bool = False, attempt_id: str | None = None) -> int:
     runtime_error = verify_runtime_ready(strict=strict_runtime or os.environ.get("AGENTIC_DEEP_AUDIT_HOOK_STRICT") == "1")
     if runtime_error is not None:
         return runtime_error
@@ -147,7 +144,7 @@ def run_decision(command: list[str], origin: str, audit_dir: Path, block_code: i
     assert decide_command is not None
     decision = decide_command(command, origin=origin)
     if not decision.allowed:
-        append_blocked_attempt(audit_dir, decision)
+        append_blocked_attempt(audit_dir, decision, attempt_id=attempt_id)
         print(f"blocked: {decision.reason}", file=sys.stderr)
         return block_code
     print("allowed")
@@ -156,11 +153,12 @@ def run_decision(command: list[str], origin: str, audit_dir: Path, block_code: i
 
 def run_event_decision(event: dict, strict_runtime: bool = False) -> int:
     command = command_from_event(event)
+    event_attempt_id = blocked_attempt_event_id(event) if blocked_attempt_event_id is not None else None
     if command:
-        return run_decision(command, "host_pre_tool", audit_dir_from_event(event), block_code=2, strict_runtime=strict_runtime)
+        return run_decision(command, "host_pre_tool", audit_dir_from_event(event), block_code=2, strict_runtime=strict_runtime, attempt_id=event_attempt_id)
     tool_name = str(event.get("tool_name") or "")
     if tool_requires_policy(tool_name):
-        return run_decision(["__tool__", tool_name or "<unknown>"], "host_pre_tool", audit_dir_from_event(event), block_code=2, strict_runtime=strict_runtime)
+        return run_decision(["__tool__", tool_name or "<unknown>"], "host_pre_tool", audit_dir_from_event(event), block_code=2, strict_runtime=strict_runtime, attempt_id=event_attempt_id)
     runtime_error = verify_runtime_ready(strict=strict_runtime or os.environ.get("AGENTIC_DEEP_AUDIT_HOOK_STRICT") == "1")
     if runtime_error is not None:
         return runtime_error

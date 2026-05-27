@@ -16,7 +16,7 @@ Run from repository root.
 
 | Gate | Command | Expected pass condition |
 |---|---|---|
-| Schema and unit validation | `PYTHONPATH=src pytest tests -q` | all package tests pass; current acceptance baseline is 351 collected tests |
+| Schema and unit validation | `PYTHONPATH=src pytest tests -q` | all package tests pass; current acceptance baseline is 362 collected tests |
 | Package metadata and skill routing | `PYTHONPATH=src pytest tests/test_release_packaging.py -q` | `.codex-plugin/plugin.json`, `pyproject.toml`, skill references and console alias are valid |
 | Smoke audits | `PYTHONPATH=src python tests/run_smoke_tests.py --report audit/SMOKE_TEST_REPORT.md` | at least three fixture audits pass and list required artifacts |
 | Policy tests | `PYTHONPATH=src pytest tests/test_pre_tool_policy.py tests/test_network_policy.py tests/test_fixture_mcp_policy.py -q` | no-exec, network precedence, MCP collision and redaction gates pass |

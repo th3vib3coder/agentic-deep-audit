@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from .audit_license_binary import SCOPED_LICENSE_KINDS, record_path
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="license validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None
     if not isinstance(payload, dict):
@@ -93,7 +94,11 @@ def validate_license_artifacts(audit_dir: Path, evidence_index: dict[str, Any], 
     if not matrix_path.exists():
         errors.append(f"missing required license matrix: {matrix_path}")
     else:
-        text = matrix_path.read_text(encoding="utf-8").lower()
+        try:
+            text = read_text_auto_capped(matrix_path, encoding="utf-8", errors="replace", label="license matrix").lower()
+        except (OSError, FileSizeLimitError) as exc:
+            errors.append(f"LICENSE_MATRIX.md invalid artifact: {exc}")
+            text = ""
         if "legal review required for reuse" not in text or "not a final legal opinion" not in text:
             errors.append("LICENSE_MATRIX.md missing legal-review caveat")
 
@@ -103,8 +108,14 @@ def validate_sbom_state(audit_dir: Path, errors: list[str]) -> None:
     skipped = audit_dir / ARTIFACT_PATHS["SBOM_SKIPPED"]
     if sbom.exists() == skipped.exists():
         errors.append("exactly one of SBOM.cdx.json or SBOM_SKIPPED.md must exist")
-    if skipped.exists() and "No promoted SBOM adapter" not in skipped.read_text(encoding="utf-8"):
-        errors.append("SBOM_SKIPPED.md missing promoted-adapter skip reason")
+    if skipped.exists():
+        try:
+            skipped_text = read_text_auto_capped(skipped, encoding="utf-8", errors="replace", label="SBOM skipped")
+        except (OSError, FileSizeLimitError) as exc:
+            errors.append(f"SBOM_SKIPPED.md invalid artifact: {exc}")
+            skipped_text = ""
+        if "No promoted SBOM adapter" not in skipped_text:
+            errors.append("SBOM_SKIPPED.md missing promoted-adapter skip reason")
 
 
 def validate_binary_artifacts(audit_dir: Path, evidence_index: dict[str, Any], run_config: dict[str, Any], errors: list[str]) -> None:

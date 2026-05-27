@@ -7,15 +7,16 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigError
 from .audit_reuse import DECISIONS, is_strong_copyleft_license, target_context_from
+from .config import ConfigError
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="reuse validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None
     if not isinstance(payload, dict):
@@ -147,7 +148,11 @@ def validate_map(audit_dir: Path, payload: dict[str, Any], errors: list[str]) ->
     if not path.exists():
         errors.append(f"missing required reuse map: {path}")
         return
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="reuse map")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"REUSE_MAP.md invalid artifact: {exc}")
+        return
     lowered = text.lower()
     if "legal caveat" not in lowered or "not a legal opinion" not in lowered:
         errors.append("REUSE_MAP.md missing legal caveat")

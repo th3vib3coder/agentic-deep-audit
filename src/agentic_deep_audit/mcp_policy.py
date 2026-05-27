@@ -13,6 +13,7 @@ SECRET_PATTERNS = [
     re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
     re.compile(r"\bBearer\s+\S{8,}\b", re.IGNORECASE),
 ]
+MAX_REDACTION_DEPTH = 256
 
 
 def _high_entropy(value: str) -> bool:
@@ -42,9 +43,11 @@ def redact_value(value: object) -> object:
     return f"<redacted sha256:{digest}>"
 
 
-def redact_host_metadata(data: object) -> object:
+def redact_host_metadata(data: object, depth: int = 0) -> object:
+    if depth > MAX_REDACTION_DEPTH:
+        return "<redacted:depth-limit>"
     if isinstance(data, dict):
-        return {key: redact_host_metadata(value) for key, value in data.items()}
+        return {key: redact_host_metadata(value, depth + 1) for key, value in data.items()}
     if isinstance(data, list):
-        return [redact_host_metadata(item) for item in data]
+        return [redact_host_metadata(item, depth + 1) for item in data]
     return redact_value(data)

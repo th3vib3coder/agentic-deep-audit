@@ -9,13 +9,14 @@ from pathlib import Path
 from typing import Any
 
 from .audit_corpus import TABLES, expected_table_counts, no_secret_check, query_corpus, source_artifact_hashes
+from .limits import FileSizeLimitError, read_json_capped
 from .models import ARTIFACT_PATHS
 
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="corpus validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None
     if not isinstance(payload, dict):

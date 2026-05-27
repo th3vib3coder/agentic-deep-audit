@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -18,8 +19,8 @@ SCIENTIFIC_CLAIM_PATTERN = re.compile(
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="scientific validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None
     if not isinstance(payload, dict):
@@ -78,7 +79,11 @@ def validate_scientific_provenance_artifacts(audit_dir: Path, evidence_index: di
     if not report_path.exists():
         errors.append(f"missing required scientific report: {report_path}")
         return errors
-    text = report_path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(report_path, encoding="utf-8", errors="replace", label="scientific report")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"SCIENTIFIC_PROVENANCE.md invalid artifact: {exc}")
+        return errors
     if not records and "no scientific signals detected" not in text:
         errors.append("SCIENTIFIC_PROVENANCE.md empty records require no scientific signals detected note")
     validate_scientific_markdown_claims(text, record_ids, "SCIENTIFIC_PROVENANCE.md", errors)
@@ -88,5 +93,10 @@ def validate_scientific_provenance_artifacts(audit_dir: Path, evidence_index: di
         supplemental_paths.extend(sorted(wiki_dir.rglob("*.md")))
     for path in supplemental_paths:
         if path.exists():
-            validate_scientific_markdown_claims(path.read_text(encoding="utf-8"), record_ids, path.relative_to(audit_dir).as_posix(), errors)
+            try:
+                supplemental_text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="scientific supplemental markdown")
+            except (OSError, FileSizeLimitError) as exc:
+                errors.append(f"{path.relative_to(audit_dir).as_posix()} invalid scientific supplemental artifact: {exc}")
+                continue
+            validate_scientific_markdown_claims(supplemental_text, record_ids, path.relative_to(audit_dir).as_posix(), errors)
     return errors

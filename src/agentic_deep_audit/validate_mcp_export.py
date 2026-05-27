@@ -6,18 +6,20 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .mcp_collision_check import GENERATED_SERVER_NAME, GENERATED_TOOL_NAMES
 from .mcp_policy import looks_secret
 from .models import ARTIFACT_PATHS
 
 
 MCP_KEYS = ["MCP_CONFIG", "MCP_DEFERRED", "MCP_COLLISION_REPORT"]
+MAX_MCP_STRING_WALK_DEPTH = 256
 
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = read_json_capped(path, label="mcp validation JSON")
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
         errors.append(f"invalid MCP JSON artifact: {path}: {exc}")
         return {}
     if not isinstance(payload, dict):
@@ -27,18 +29,22 @@ def load_json(path: Path, errors: list[str]) -> dict[str, Any]:
 
 
 def collect_strings(value: Any) -> list[str]:
-    if isinstance(value, dict):
-        result: list[str] = []
-        for key, item in value.items():
-            result.append(str(key))
-            result.extend(collect_strings(item))
-        return result
-    if isinstance(value, list):
-        result: list[str] = []
-        for item in value:
-            result.extend(collect_strings(item))
-        return result
-    return [value] if isinstance(value, str) else []
+    result: list[str] = []
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > MAX_MCP_STRING_WALK_DEPTH:
+            continue
+        if isinstance(current, dict):
+            for key, item in current.items():
+                result.append(str(key))
+                stack.append((item, depth + 1))
+        elif isinstance(current, list):
+            for item in current:
+                stack.append((item, depth + 1))
+        elif isinstance(current, str):
+            result.append(current)
+    return result
 
 
 def artifact_set(audit_dir: Path) -> list[str]:
@@ -96,7 +102,11 @@ def validate_mcp_config(audit_dir: Path, errors: list[str]) -> None:
 
 
 def validate_mcp_report(path: Path, errors: list[str]) -> None:
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="mcp report")
+    except (OSError, FileSizeLimitError) as exc:
+        errors.append(f"{path.name} invalid artifact: {exc}")
+        return
     if "Reason:" not in text:
         errors.append(f"{path.name} missing Reason")
     for value in text.split():
