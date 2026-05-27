@@ -257,6 +257,8 @@ def test_missing_git_executable_emits_provenance_fallback(tmp_path: Path) -> Non
 def test_run_git_command_rejects_git_executable_inside_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake_git = tmp_path / ("git.cmd" if os.name == "nt" else "git")
     fake_git.write_text("@echo poisoned\n", encoding="utf-8")
+    if os.name != "nt":
+        fake_git.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
 
     completed, record = run_git_command(tmp_path, ["rev-parse", "--show-toplevel"])
@@ -272,6 +274,8 @@ def test_run_git_command_rejects_git_executable_inside_parent_repo_root(monkeypa
     (repo / ".git").mkdir()
     fake_git = repo / ("git.cmd" if os.name == "nt" else "git")
     fake_git.write_text("@echo poisoned\n", encoding="utf-8")
+    if os.name != "nt":
+        fake_git.chmod(0o755)
     monkeypatch.setenv("PATH", str(repo))
 
     completed, record = run_git_command(subdir, ["rev-parse", "--show-toplevel"])
