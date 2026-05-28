@@ -55,6 +55,8 @@ def test_mixed_risky_emits_suspicious_supply_chain_and_report(tmp_path: Path) ->
     assert all(item["evidence_ids"] and item["recommendation"] for item in suspicious["behaviors"])
     risks = load_json(audit_dir / ARTIFACT_PATHS["RISK_FINDINGS"])
     assert risks["findings"] == []
+    assert risks["promotion_policy"] == "heuristics_not_promoted_without_external_tool_confirmation"
+    assert risks["source_tools"] == []
     assert "not promoted without external tool confirmation" in " ".join(risks["limitations"])
     supply = (audit_dir / ARTIFACT_PATHS["SUPPLY_CHAIN_SIGNALS"]).read_text(encoding="utf-8")
     for signal in ["typosquatting", "dependency_confusion", "starjacking", "maintainer_compromise", "yanked_or_deprecated", "lifecycle_downloads"]:
@@ -108,6 +110,24 @@ def test_risk_validation_rejects_unconfirmed_heuristic_source_kind(tmp_path: Pat
 
     assert not validation.ok
     assert any("invalid source_kind" in error for error in validation.errors)
+
+
+def test_risk_validation_requires_promotion_policy_metadata(tmp_path: Path) -> None:
+    repo = copy_fixture(tmp_path, "mixed_risky")
+    result = run_cli("risk", "--config", str(repo / "audit.config.yaml"), cwd=repo)
+    assert result.returncode == 0, result.stderr
+    audit_dir = repo / "audit"
+    path = audit_dir / ARTIFACT_PATHS["RISK_FINDINGS"]
+    payload = load_json(path)
+    payload.pop("promotion_policy")
+    payload.pop("source_tools")
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    validation = validate_audit(audit_dir)
+
+    assert not validation.ok
+    assert any("promotion policy" in error for error in validation.errors)
+    assert any("source_tools array" in error for error in validation.errors)
 
 
 def test_agentic_validation_rejects_unknown_code_and_report_drift(tmp_path: Path) -> None:

@@ -218,6 +218,14 @@ def test_risk_schema_rejects_unconfirmed_heuristic_source_kind() -> None:
     assert_invalid(schema("risk_findings.schema.json"), invalid)
 
 
+def test_suspicious_schema_rejects_extra_keys_and_requires_recommendation() -> None:
+    valid_behavior = {"behavior_id": "susp-1", "kind": "eval", "evidence_ids": ["ev-000001"], "severity": "high", "confidence": "medium", "source": "heuristic", "recommendation": "avoid eval"}
+    suspicious_schema = schema("suspicious_behaviors.schema.json")
+    validate_sample(suspicious_schema, {"schema_version": "1.0", "behaviors": [valid_behavior]})
+    assert_invalid(suspicious_schema, {"schema_version": "1.0", "behaviors": [{key: value for key, value in valid_behavior.items() if key != "recommendation"}]})
+    assert_invalid(suspicious_schema, {"schema_version": "1.0", "behaviors": [{**valid_behavior, "unexpected": "field"}]})
+
+
 def test_reuse_schema_requires_plan_decision_enum_and_human_gate() -> None:
     valid_card = {
         "reuse_id": "reuse-1",
@@ -248,7 +256,7 @@ def test_reuse_schema_requires_plan_decision_enum_and_human_gate() -> None:
 @pytest.mark.parametrize(
     ("schema_name", "sample"),
     [
-        ("suspicious_behaviors.schema.json", {"schema_version": "1.0", "behaviors": [{"behavior_id": "susp-1", "kind": "eval", "evidence_ids": ["ev-000001"], "severity": "high", "confidence": "medium", "source": "heuristic"}]}),
+        ("suspicious_behaviors.schema.json", {"schema_version": "1.0", "behaviors": [{"behavior_id": "susp-1", "kind": "eval", "evidence_ids": ["ev-000001"], "severity": "high", "confidence": "medium", "source": "heuristic", "recommendation": "avoid eval"}]}),
         ("agentic_security_finding.schema.json", {"schema_version": "1.0", "findings": [{"finding_id": "agentic-1", "code": "W015", "target": "AGENTS.md", "severity": "medium", "confidence": "high", "evidence_ids": ["ev-000001"], "recommendation": "sanitize"}]}),
         ("license_cards.schema.json", {"schema_version": "1.0", "cards": [{"card_id": "lic-1", "kind": "file", "declared_license": "MIT", "confidence": "medium", "detection_method": "spdx_header", "requires_human_decision": False, "evidence_ids": ["ev-000001"]}]}),
         ("reuse_cards.schema.json", {"schema_version": "1.0", "target_context": {"allowed_languages": ["python"]}, "scoring_input_sources": {"special_implementations": "SPECIAL_IMPLEMENTATIONS.json"}, "cards": [{"reuse_id": "reuse-1", "candidate_id": "candidate-1", "name": "Indexer", "problem_solved": "search", "files": ["a.py"], "license_status": "needs_review", "target_context": {"allowed_languages": ["python"]}, "recommendation": "study", "decision": "pending", "requires_human_decision": True, "legal_caveat": "review", "security_caveat": "review", "performance_caveat": "static", "score_inputs": {}, "evidence_ids": ["ev-000001"]}]}),

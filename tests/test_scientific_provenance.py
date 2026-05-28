@@ -10,7 +10,7 @@ from pathlib import Path
 from agentic_deep_audit.audit_graph import run_graph
 from agentic_deep_audit.audit_inventory import run_inventory
 from agentic_deep_audit.audit_manifest import run_manifest
-from agentic_deep_audit.audit_scientific import run_scientific_provenance, source_method
+from agentic_deep_audit.audit_scientific import run_scientific_provenance, simple_key_values, source_method
 from agentic_deep_audit.audit_surface import run_surface
 from agentic_deep_audit.audit_synthesis import run_synthesis
 from agentic_deep_audit.audit_validate import validate_audit
@@ -127,6 +127,93 @@ def test_scientific_values_are_not_inferred_without_textual_evidence(tmp_path: P
     assert "genome_build" not in {record["category"] for record in payload["records"]}
 
 
+def test_scientific_detects_dataset_accessions_and_citations(tmp_path: Path) -> None:
+    repo = copy_fixture("scientific_data_project", tmp_path)
+    readme = repo / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\nDataset accessions: GSE123456, GSM654321, SRR111222, SRX333444, PRJEB5555, ERR666777, PRJNA888999.\n"
+        + "Protein reference UniProt accession P12345. Citation DOI: 10.1038/s41586-020-2649-2; PMID: 34567890.\n",
+        encoding="utf-8",
+    )
+    audit_dir, _ = build_scientific(repo, repo / "audit-accessions")
+
+    payload = load_json(audit_dir / ARTIFACT_PATHS["SCIENTIFIC_PROVENANCE"])
+    dataset_records = [record for record in payload["records"] if record["category"] == "dataset_provenance"]
+    accessions = {
+        (item["source"], item["accession"])
+        for record in dataset_records
+        for item in record["observed_value"].get("accessions", [])
+    }
+    citations = {
+        (item["kind"], item["value"])
+        for record in dataset_records
+        for item in record["observed_value"].get("citations", [])
+    }
+
+    assert ("GEO", "GSE123456") in accessions
+    assert ("GEO", "GSM654321") in accessions
+    assert ("SRA", "SRR111222") in accessions
+    assert ("SRA", "SRX333444") in accessions
+    assert ("ENA", "PRJEB5555") in accessions
+    assert ("ENA", "ERR666777") in accessions
+    assert ("BioProject", "PRJNA888999") in accessions
+    assert ("UniProt", "P12345") in accessions
+    assert ("DOI", "10.1038/s41586-020-2649-2") in citations
+    assert ("PMID", "34567890") in citations
+    assert validate_audit(audit_dir).ok
+
+
+def test_scientific_key_value_parser_preserves_balanced_values() -> None:
+    values = simple_key_values(
+        "\n".join(
+            [
+                'confounders: ["donor", "batch"] # yaml-style list',
+                'normalization_method = "log1p CPM"',
+                'dataset_url: https://example.org/data#fragment',
+                'broken: ["donor"',
+            ]
+        )
+    )
+
+    assert values["confounders"] == '["donor", "batch"]'
+    assert values["normalization_method"] == "log1p CPM"
+    assert values["dataset_url"] == "https://example.org/data#fragment"
+    assert "broken" not in values
+
+
+def test_scientific_dataset_hash_requires_sha256_and_records_algorithm(tmp_path: Path) -> None:
+    repo = copy_fixture("scientific_data_project", tmp_path)
+    audit_dir, _ = build_scientific(repo, repo / "audit-sha256")
+    payload = load_json(audit_dir / ARTIFACT_PATHS["SCIENTIFIC_PROVENANCE"])
+    config_dataset = next(
+        record["observed_value"]
+        for record in payload["records"]
+        if record["category"] == "dataset_provenance" and record["observed_value"].get("source_path") == "config/analysis.yaml"
+    )
+    assert config_dataset["hash_algorithm"] == "sha256"
+    assert len(config_dataset["sha256"]) == 64
+
+    short_hash_repo = copy_fixture("scientific_data_project", tmp_path / "short")
+    config_path = short_hash_repo / "config" / "analysis.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef",
+        ),
+        encoding="utf-8",
+    )
+    short_audit_dir, _ = build_scientific(short_hash_repo, short_hash_repo / "audit-short-hash")
+    short_payload = load_json(short_audit_dir / ARTIFACT_PATHS["SCIENTIFIC_PROVENANCE"])
+    short_config_dataset = next(
+        record["observed_value"]
+        for record in short_payload["records"]
+        if record["category"] == "dataset_provenance" and record["observed_value"].get("source_path") == "config/analysis.yaml"
+    )
+    assert "sha256" not in short_config_dataset
+    assert "hash_algorithm" not in short_config_dataset
+
+
 def test_scientific_provenance_claim_without_record_fails_validation(tmp_path: Path) -> None:
     repo = copy_fixture("scientific_data_project", tmp_path)
     audit_dir, _ = build_scientific(repo, repo / "audit-broken-scientific")
@@ -146,6 +233,21 @@ def test_report_and_wiki_scientific_claims_without_record_fail_validation(tmp_pa
     wiki_dir = audit_dir / "wiki"
     wiki_dir.mkdir()
     (wiki_dir / "science.md").write_text("# Wiki\n\nBatch correction used ComBat.\n", encoding="utf-8")
+
+    result = validate_audit(audit_dir)
+
+    assert not result.ok
+    assert any("REPORT.md scientific claim lacks provenance record or open question" in error for error in result.errors)
+    assert any("wiki/science.md scientific claim lacks provenance record or open question" in error for error in result.errors)
+
+
+def test_accession_and_citation_claims_without_record_fail_validation(tmp_path: Path) -> None:
+    repo = copy_fixture("surface_basic", tmp_path)
+    audit_dir, _ = build_scientific(repo, repo / "audit-accession-claims")
+    (audit_dir / ARTIFACT_PATHS["REPORT"]).write_text("# Report\n\nExternal dataset GSE123456 cites DOI 10.1038/s41586-020-2649-2.\n", encoding="utf-8")
+    wiki_dir = audit_dir / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "science.md").write_text("# Wiki\n\nBioProject PRJNA888999 and PMID: 34567890 are used.\n", encoding="utf-8")
 
     result = validate_audit(audit_dir)
 

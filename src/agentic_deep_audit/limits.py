@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 
@@ -71,6 +71,28 @@ def read_json_capped(path: Path, *, max_bytes: int = MAX_AUDIT_FILE_BYTES, label
         return json.loads(read_text_auto_capped(path, encoding="utf-8", max_bytes=max_bytes, label=label))
     except RecursionError as exc:
         raise JsonDepthLimitError(f"{label} exceeds JSON parser depth budget") from exc
+
+
+def is_safe_repo_relative_path(path_value: str) -> bool:
+    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
+        return False
+    posix_path = PurePosixPath(path_value)
+    windows_path = PureWindowsPath(path_value)
+    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive or windows_path.root:
+        return False
+    return ".." not in posix_path.parts and ".." not in windows_path.parts
+
+
+def resolve_repo_file(repo_path: Path, path_value: str) -> Path | None:
+    if not is_safe_repo_relative_path(path_value):
+        return None
+    root = repo_path.resolve()
+    candidate = (root / path_value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
 
 
 def sha256_file_capped(path: Path, max_bytes: int = MAX_AUDIT_FILE_BYTES, label: str = "file") -> str:

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .audit_risk import AGENTIC_CODES, BEHAVIOR_KINDS, SUPPLY_SIGNALS
+from .audit_risk import AGENTIC_CODES, BEHAVIOR_KINDS, RISK_PROMOTION_POLICY, SUPPLY_SIGNALS
 from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
@@ -73,6 +73,10 @@ def validate_risk_findings(audit_dir: Path, available: set[str], errors: list[st
     if not isinstance(findings, list):
         errors.append("RISK_FINDINGS.json requires findings array")
         return
+    if payload.get("promotion_policy") != RISK_PROMOTION_POLICY:
+        errors.append("RISK_FINDINGS.json must document heuristic promotion policy")
+    if not isinstance(payload.get("source_tools"), list):
+        errors.append("RISK_FINDINGS.json requires source_tools array")
     for index, finding in enumerate(findings):
         if not isinstance(finding, dict):
             errors.append(f"RISK_FINDINGS.json findings[{index}] must be object")

@@ -12,7 +12,7 @@ from .models import ARTIFACT_PATHS
 
 
 SCIENTIFIC_CLAIM_PATTERN = re.compile(
-    r"\b(GRCh\d+|hg\d+|GENCODE|RefSeq|organism|taxon|random[_ -]?seed|seed\s*[:=]|confounder|covariate|batch[_ -]?key|batch correction|normalization|TPM|CPM|log1p|dataset[_ -]?path|data[_ -]?path)\b",
+    r"\b(GRCh\d+|hg\d+|GENCODE|RefSeq|organism|taxon|random[_ -]?seed|seed\s*[:=]|confounder|covariate|batch[_ -]?key|batch correction|normalization|TPM|CPM|log1p|dataset[_ -]?path|data[_ -]?path|GS[EM]\d{3,}|SR[RX]\d{3,}|PRJEB\d{3,}|ERR\d{3,}|PRJNA\d{3,}|UniProt(?:KB)?|PMID\s*[:=]?\s*\d{6,9}|10\.\d{4,9}/[-._;()/:A-Z0-9]+)\b",
     flags=re.IGNORECASE,
 )
 

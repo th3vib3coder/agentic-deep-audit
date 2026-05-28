@@ -75,6 +75,15 @@
         }
       }
     },
+    "promotion_policy": {
+      "type": "string"
+    },
+    "source_tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "run_id": {
       "type": [
         "string",

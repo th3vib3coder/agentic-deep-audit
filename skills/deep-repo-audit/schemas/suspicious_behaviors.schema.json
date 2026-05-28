@@ -15,13 +15,15 @@
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "behavior_id",
           "kind",
           "evidence_ids",
           "severity",
           "confidence",
-          "source"
+          "source",
+          "recommendation"
         ],
         "properties": {
           "behavior_id": {
@@ -73,6 +75,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "recommendation": {
+            "type": "string"
           }
         }
       }

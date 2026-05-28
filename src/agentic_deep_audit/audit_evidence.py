@@ -5,10 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any, Iterable
 
-from .limits import MAX_AUDIT_FILE_BYTES, FileSizeLimitError, decode_text_bytes, read_bytes_capped, read_text_auto_capped
+from .limits import MAX_AUDIT_FILE_BYTES, FileSizeLimitError, decode_text_bytes, read_bytes_capped, read_text_auto_capped, resolve_repo_file
 from .models import ARTIFACT_PATHS
 
 
@@ -86,28 +86,6 @@ def build_text_view(data: bytes) -> TextView | None:
 
 def read_file_bytes(path: Path) -> bytes:
     return read_bytes_capped(path, MAX_AUDIT_FILE_BYTES, "evidence file")
-
-
-def is_safe_repo_relative_path(path_value: str) -> bool:
-    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
-        return False
-    posix_path = PurePosixPath(path_value)
-    windows_path = PureWindowsPath(path_value)
-    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive or windows_path.root:
-        return False
-    return ".." not in posix_path.parts and ".." not in windows_path.parts
-
-
-def resolve_repo_file(repo_path: Path, path_value: str) -> Path | None:
-    if not is_safe_repo_relative_path(path_value):
-        return None
-    root = repo_path.resolve()
-    candidate = (root / path_value).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        return None
-    return candidate
 
 
 def file_evidence_for_record(record: dict[str, Any], repo_path: Path, allocator: EvidenceIdAllocator) -> dict[str, Any]:

@@ -12,6 +12,17 @@ from .models import ARTIFACT_PATHS
 
 
 TEXT_EXTENSIONS = {".md", ".txt", ".yaml", ".yml", ".json", ".toml", ".py", ".r", ".nf", ".smk", ".cwl", ".ipynb", ".tsv", ".csv"}
+KEY_VALUE_RE = re.compile(r"(?im)^\s*([A-Za-z][\w.-]*)\s*[:=]\s*(.+?)\s*$")
+SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
+ACCESSION_PATTERNS = {
+    "GEO": re.compile(r"\bGS[EM]\d{3,}\b"),
+    "SRA": re.compile(r"\bSR[RX]\d{3,}\b"),
+    "ENA": re.compile(r"\b(?:PRJEB|ERR)\d{3,}\b"),
+    "BioProject": re.compile(r"\bPRJNA\d{3,}\b"),
+}
+UNIPROT_RE = re.compile(r"\bUniProt(?:KB)?(?:\s+accession)?\s*[:=]?\s*([A-Z0-9]{6,10})\b", flags=re.IGNORECASE)
+DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", flags=re.IGNORECASE)
+PMID_RE = re.compile(r"\bPMID\s*[:=]?\s*(\d{6,9})\b", flags=re.IGNORECASE)
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -29,9 +40,57 @@ def evidence_by_path(audit_dir: Path) -> dict[str, str]:
 
 def simple_key_values(text: str) -> dict[str, str]:
     values: dict[str, str] = {}
-    for match in re.finditer(r"(?im)^\s*([A-Za-z][\w.-]*)\s*[:=]\s*[\"']?([^\"'\n#\]]+)", text):
-        values[match.group(1).lower()] = match.group(2).strip().strip(",")
+    for match in KEY_VALUE_RE.finditer(text):
+        value = normalize_key_value(match.group(2))
+        if value:
+            values[match.group(1).lower()] = value
     return values
+
+
+def normalize_key_value(raw_value: str) -> str:
+    value = re.split(r"\s+#", raw_value, maxsplit=1)[0].strip().rstrip(",").strip()
+    if not value:
+        return ""
+    if value[0] in "[{" and not ((value[0] == "[" and value.endswith("]")) or (value[0] == "{" and value.endswith("}"))):
+        return ""
+    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        value = value[1:-1].strip()
+    return value
+
+
+def dataset_accessions(text: str) -> list[dict[str, str]]:
+    accessions: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for source, pattern in ACCESSION_PATTERNS.items():
+        for accession in pattern.findall(text):
+            key = (source, accession)
+            if key not in seen:
+                seen.add(key)
+                accessions.append({"source": source, "accession": accession})
+    for accession in UNIPROT_RE.findall(text):
+        normalized = accession.upper()
+        key = ("UniProt", normalized)
+        if key not in seen:
+            seen.add(key)
+            accessions.append({"source": "UniProt", "accession": normalized})
+    return accessions
+
+
+def citation_references(text: str) -> list[dict[str, str]]:
+    citations: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for doi in DOI_RE.findall(text):
+        normalized = doi.rstrip(".,;)").lower()
+        key = ("DOI", normalized)
+        if key not in seen:
+            seen.add(key)
+            citations.append({"kind": "DOI", "value": normalized})
+    for pmid in PMID_RE.findall(text):
+        key = ("PMID", pmid)
+        if key not in seen:
+            seen.add(key)
+            citations.append({"kind": "PMID", "value": pmid})
+    return citations
 
 
 def read_text(repo_path: Path, path_value: str) -> str:
@@ -88,13 +147,20 @@ def detect_dataset(text: str, path_value: str, evidence_id: str, recorder: Scien
             observed["path"] = values[key]
             break
     for key in ["dataset_sha256", "sha256", "data_sha256"]:
-        if key in values and re.fullmatch(r"[A-Fa-f0-9]{32,64}", values[key]):
+        if key in values and SHA256_RE.fullmatch(values[key]):
             observed["sha256"] = values[key]
+            observed["hash_algorithm"] = "sha256"
             break
     for key in ["source_url", "dataset_url", "data_url"]:
         if key in values and values[key].startswith(("http://", "https://")):
             observed["source_url"] = values[key]
             break
+    accessions = dataset_accessions(text)
+    if accessions:
+        observed["accessions"] = accessions
+    citations = citation_references(text)
+    if citations:
+        observed["citations"] = citations
     if observed:
         recorder.add("dataset_provenance", observed, evidence_id, method, confidence, requires_human, path_value)
 

@@ -17,6 +17,7 @@ BEHAVIOR_KINDS = ["eval", "exec", "postinstall", "network_call", "dynamic_import
 AGENTIC_CODES = {"E001", "E002", "E003", "E004", "W007", "W008", "W009", "W010", "W011", "W012", "W013", "W014", "W015", "W016", "W017", "W018"}
 AGENTIC_NAMES = {"agents.md", "claude.md", "gemini.md", "skill.md", "plugin.json", ".mcp.json"}
 SUPPLY_SIGNALS = ["typosquatting", "dependency_confusion", "starjacking", "maintainer_compromise", "yanked_or_deprecated", "lifecycle_downloads"]
+RISK_PROMOTION_POLICY = "heuristics_not_promoted_without_external_tool_confirmation"
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -99,6 +100,8 @@ def risk_findings_payload(run_config: dict[str, Any]) -> dict[str, Any]:
         "schema_version": "1.0",
         "run_id": run_config.get("run_id"),
         "findings": [],
+        "promotion_policy": RISK_PROMOTION_POLICY,
+        "source_tools": [],
         "limitations": ["heuristic suspicious behaviors are not promoted without external tool confirmation"],
     }
 
