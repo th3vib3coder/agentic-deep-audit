@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -9,7 +10,7 @@ import sys
 from pathlib import Path
 
 from agentic_deep_audit.audit_validate import validate_audit
-from agentic_deep_audit.audit_wiki import decision_paths, run_wiki, stable_slug, write_page
+from agentic_deep_audit.audit_wiki import decision_paths, markdown_text, run_wiki, stable_slug, write_page, write_table_category
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 from agentic_deep_audit.validate_wiki import REQUIRED_FRONTMATTER, parse_frontmatter
 
@@ -331,3 +332,66 @@ def test_decision_paths_reject_repo_relative_traversal(tmp_path: Path) -> None:
     )
 
     assert decision_paths(audit_dir) == []
+
+
+def test_wiki_page_blocks_markdown_structure_and_codespan_injection(tmp_path: Path) -> None:
+    # C6-01: attacker-controlled title/purpose/detail must not forge markdown headings/lists via
+    # embedded newlines, nor open a code span via backticks, in the rendered single-line contexts.
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    write_json(audit_dir / ARTIFACT_PATHS["PROVENANCE"], {"schema_version": "1.0", "git": {"commit": "abc"}})
+    write_page(
+        audit_dir,
+        "wiki/modules/inject.md",
+        "Mod\n## Forged Heading\n- forged item",
+        "module",
+        ["module"],
+        [],
+        [],
+        "Purpose\n# Forged Title",
+        ["Detail `open span` and\n## forged detail heading"],
+    )
+
+    text = (audit_dir / "wiki" / "modules" / "inject.md").read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    # Without the fix the embedded newlines survive and these become standalone markdown lines.
+    assert "## Forged Heading" not in lines
+    assert "# Forged Title" not in lines
+    assert "## forged detail heading" not in lines
+    assert "- forged item" not in lines
+    # Without the fix the backticks open a real code span; the fix escapes them.
+    assert "\\`open span\\`" in text
+
+
+def test_wiki_table_category_drops_unavailable_evidence_ids(tmp_path: Path) -> None:
+    # C6-02: ev- tokens harvested from attacker-influenced source rows must be validated against
+    # EVIDENCE_INDEX so a forged "ev-999999" cannot become a fabricated wiki evidence link.
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    write_json(audit_dir / ARTIFACT_PATHS["PROVENANCE"], {"schema_version": "1.0", "git": {"commit": "abc"}})
+    write_json(
+        audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"],
+        {
+            "schema_version": "1.0",
+            "repo": {"path": str(tmp_path), "commit": None},
+            "evidence": [{"id": "ev-000001", "path": "src/a.py", "kind": "file", "start_byte": 0, "end_byte": 1, "sha256": "0" * 64, "observed": "x"}],
+        },
+    )
+    (audit_dir / ARTIFACT_PATHS["FEATURE_CATALOG"]).write_text(
+        "# Feature Catalog\n\n| Feature | Source | Status | Evidence |\n|---|---|---|---|\n"
+        "| Feat A | src/a.py | observed | ev-000001 ev-999999 |\n",
+        encoding="utf-8",
+    )
+    run_config = {"repo": {"kind": "local", "path": str(tmp_path), "github": None}}
+
+    write_table_category(audit_dir, run_config, "FEATURE_CATALOG", "features", "Features", "feature")
+
+    pages = [path for path in (audit_dir / "wiki" / "features").glob("*.md") if path.name != "index.md"]
+    assert pages
+    text = pages[0].read_text(encoding="utf-8")
+    match = re.search(r"evidence_ids:\s*(\[[^\]]*\])", text)
+    assert match
+    ids = json.loads(match.group(1))
+    assert "ev-000001" in ids
+    assert "ev-999999" not in ids

@@ -79,9 +79,14 @@ def stable_slug(value: str) -> str:
 
 
 def markdown_text(value: Any) -> str:
-    text = html.escape(clean_markdown_text(value), quote=False)
-    text = re.sub(r"\bev-(\d{6,})\b", r"ev\\-\1", text)
-    return text.replace("|", "\\|")
+    # C6-01: every caller uses this for single-line inline contexts (headings, purpose, details,
+    # open questions, frontmatter title). Collapse all whitespace so an attacker-controlled value
+    # cannot embed a newline followed by "## heading"/list markers and forge markdown structure,
+    # and escape backslash + backtick so a code span cannot be opened from injected content.
+    text = re.sub(r"\s+", " ", clean_markdown_text(value)).strip()
+    text = html.escape(text, quote=False)
+    text = text.replace("\\", "\\\\").replace("|", "\\|").replace("`", "\\`")
+    return re.sub(r"\bev-(\d{6,})\b", r"ev\\-\1", text)
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -420,9 +425,13 @@ def write_table_category(audit_dir: Path, run_config: dict[str, Any], artifact_k
     if not rows:
         write_page(audit_dir, f"wiki/{folder}/000_{folder}_skipped.md", f"{title} Skipped", page_type, [folder], [ARTIFACT_PATHS[artifact_key]], [], f"No evidence-backed {folder} rows were available.", ["- skipped: source artifact has no promotable rows."], backlinks=[f"{folder}/index"], run_config=run_config)
         return
+    available = available_evidence(audit_dir)
     for index, cells in enumerate(rows, start=1):
         label = cells[0]
-        evidence_ids = re.findall(r"ev-\d{6,}", " ".join(cells))
+        # C6-02: source-row cells are attacker-influenced; only promote ev- ids that actually exist
+        # in EVIDENCE_INDEX so a forged "ev-000001" token cannot become a fabricated evidence link
+        # (and cannot be re-ingested as trusted by the corpus frontmatter reader).
+        evidence_ids = [match for match in re.findall(r"ev-\d{6,}", " ".join(cells)) if match in available]
         slug = stable_slug(label)
         write_page(audit_dir, f"wiki/{folder}/{index:03d}_{slug}.md", label, page_type, [folder], [ARTIFACT_PATHS[artifact_key]], evidence_ids, f"Expose `{label}` from `{ARTIFACT_PATHS[artifact_key]}`.", [f"- Source row: `{' | '.join(cells)}`."], backlinks=[f"{folder}/index"], run_config=run_config)
 
