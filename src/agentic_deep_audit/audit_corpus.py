@@ -608,11 +608,6 @@ def fts_query(value: str) -> str:
     return " OR ".join(f'"{token}"' for token in tokens[:8])
 
 
-def like_query(value: str) -> str:
-    escaped = value[:200].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"{escaped}%"
-
-
 def evidence_ranges(connection: sqlite3.Connection, evidence_ids: list[str]) -> list[dict[str, Any]]:
     ranges: list[dict[str, Any]] = []
     for evidence_id in evidence_ids:

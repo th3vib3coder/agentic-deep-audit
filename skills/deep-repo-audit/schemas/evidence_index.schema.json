@@ -158,6 +158,9 @@
           "sha256": {
             "type": "string"
           },
+          "byte_basis": {
+            "const": "raw_file_bytes"
+          },
           "observed": {
             "type": "string"
           },
@@ -192,6 +195,25 @@
       "type": "array",
       "items": {
         "type": "object"
+      }
+    },
+    "read_failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "reason"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

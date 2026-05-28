@@ -22,8 +22,17 @@ PHASE_NAMES = ["bootstrap", "inventory", "provenance", "manifest", "graph", "sur
 MAX_SOURCE_PARSE_BYTES = 1_000_000
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    # C6 mop-up: write via a temp file + atomic replace so a crash mid-write cannot leave a
+    # truncated AUDIT_RUNTIME_METRICS / review artifact behind (mirrors synthesis/wiki writers).
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -296,7 +305,7 @@ def run_performance_quality(run_config: dict[str, Any], audit_dir: Path) -> None
     benchmarks = benchmark_files(file_index, evidence_lookup)
     claims = performance_claims(repo_path, file_index, evidence_lookup)
     coverage = test_coverage_signal(file_index, build_test_map, ci_map, repo_path, evidence_lookup)
-    (audit_dir / ARTIFACT_PATHS["PERFORMANCE_REVIEW"]).write_text(performance_markdown(hot, signals, benchmarks, claims), encoding="utf-8")
-    (audit_dir / ARTIFACT_PATHS["QUALITY_REVIEW"]).write_text(quality_markdown(file_index, ci_map, telemetry, risk, coverage), encoding="utf-8")
-    (audit_dir / ARTIFACT_PATHS["TEST_COVERAGE_SIGNAL"]).write_text(coverage_markdown(coverage), encoding="utf-8")
+    atomic_write_text(audit_dir / ARTIFACT_PATHS["PERFORMANCE_REVIEW"], performance_markdown(hot, signals, benchmarks, claims))
+    atomic_write_text(audit_dir / ARTIFACT_PATHS["QUALITY_REVIEW"], quality_markdown(file_index, ci_map, telemetry, risk, coverage))
+    atomic_write_text(audit_dir / ARTIFACT_PATHS["TEST_COVERAGE_SIGNAL"], coverage_markdown(coverage))
     write_json(audit_dir / ARTIFACT_PATHS["AUDIT_RUNTIME_METRICS"], audit_runtime_metrics(run_config, audit_dir, file_index, started))

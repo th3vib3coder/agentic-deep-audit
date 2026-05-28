@@ -13,6 +13,7 @@ from agentic_deep_audit.models import ARTIFACT_PATHS
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_DIR = PLUGIN_ROOT / "skills" / "deep-repo-audit" / "schemas"
+SRC_SCHEMA_DIR = PLUGIN_ROOT / "src" / "agentic_deep_audit" / "schemas"
 
 
 def schema(name: str) -> dict:
@@ -56,6 +57,7 @@ def test_all_group_a_schemas_parse() -> None:
         "audit_runtime_metrics.schema.json",
         "binary_artifacts.schema.json",
         "corpus_index.schema.json",
+        "mcp_config.schema.json",
         "adapter_decision.schema.json",
         "core_envelope.schema.json",
     }
@@ -64,6 +66,15 @@ def test_all_group_a_schemas_parse() -> None:
     assert observed == expected
     for schema_name in observed:
         Draft202012Validator.check_schema(schema(schema_name))
+
+
+def test_src_and_skill_schema_copies_are_identical() -> None:
+    src_schemas = {path.name for path in SRC_SCHEMA_DIR.glob("*.schema.json")}
+    skill_schemas = {path.name for path in SCHEMA_DIR.glob("*.schema.json")}
+
+    assert src_schemas == skill_schemas
+    for schema_name in sorted(src_schemas):
+        assert (SRC_SCHEMA_DIR / schema_name).read_bytes() == (SCHEMA_DIR / schema_name).read_bytes(), schema_name
 
 
 def test_all_group_a_schemas_reject_unknown_root_properties() -> None:
