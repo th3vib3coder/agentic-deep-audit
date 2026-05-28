@@ -5,10 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable
 
-from .limits import MAX_AUDIT_FILE_BYTES, decode_text_bytes, read_bytes_capped, read_text_auto_capped
+from .limits import MAX_AUDIT_FILE_BYTES, FileSizeLimitError, decode_text_bytes, read_bytes_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -88,10 +88,35 @@ def read_file_bytes(path: Path) -> bytes:
     return read_bytes_capped(path, MAX_AUDIT_FILE_BYTES, "evidence file")
 
 
+def is_safe_repo_relative_path(path_value: str) -> bool:
+    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
+        return False
+    posix_path = PurePosixPath(path_value)
+    windows_path = PureWindowsPath(path_value)
+    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive or windows_path.root:
+        return False
+    return ".." not in posix_path.parts and ".." not in windows_path.parts
+
+
+def resolve_repo_file(repo_path: Path, path_value: str) -> Path | None:
+    if not is_safe_repo_relative_path(path_value):
+        return None
+    root = repo_path.resolve()
+    candidate = (root / path_value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
 def file_evidence_for_record(record: dict[str, Any], repo_path: Path, allocator: EvidenceIdAllocator) -> dict[str, Any]:
     relative = str(record["path"])
     source_key = f"file:{relative}"
-    data = read_file_bytes(repo_path / relative)
+    source = resolve_repo_file(repo_path, relative)
+    if source is None:
+        raise PermissionError(f"unsafe evidence source path: {relative}")
+    data = read_file_bytes(source)
     start_byte = 0
     end_byte = len(data)
     text_view = None if bool(record.get("binary")) else build_text_view(data)
@@ -102,6 +127,7 @@ def file_evidence_for_record(record: dict[str, Any], repo_path: Path, allocator:
             "path": relative,
             "start_byte": start_byte,
             "end_byte": end_byte,
+            "byte_basis": "raw_file_bytes",
             "sha256": sha256_range(data, start_byte, end_byte),
             "binary_safe": True,
             "observed": f"Initial binary-safe file-level inventory record for {record['kind']} file",
@@ -114,6 +140,7 @@ def file_evidence_for_record(record: dict[str, Any], repo_path: Path, allocator:
         "end_line": text_view.line_count,
         "start_byte": start_byte,
         "end_byte": end_byte,
+        "byte_basis": "raw_file_bytes",
         "sha256": sha256_range(data, start_byte, end_byte),
         "line_ending_original": text_view.line_ending_original,
         "normalized_text_sha256": sha256_bytes(text_view.normalized_bytes),
@@ -123,13 +150,20 @@ def file_evidence_for_record(record: dict[str, Any], repo_path: Path, allocator:
 
 def evidence_for_records(records: list[dict[str, Any]], repo_path: Path, run_config: dict[str, Any]) -> dict[str, Any]:
     allocator = EvidenceIdAllocator()
-    evidence = [file_evidence_for_record(record, repo_path, allocator) for record in sorted(records, key=lambda item: str(item["path_normalized"]))]
+    evidence: list[dict[str, Any]] = []
+    read_failures: list[dict[str, str]] = []
+    for record in sorted(records, key=lambda item: str(item["path_normalized"])):
+        try:
+            evidence.append(file_evidence_for_record(record, repo_path, allocator))
+        except (OSError, PermissionError, FileSizeLimitError) as exc:
+            read_failures.append({"path": str(record.get("path") or ""), "reason": type(exc).__name__})
     return {
         "schema_version": "1.1",
         "repo": {"path": str(repo_path), "commit": (run_config.get("repo") or {}).get("commit")},
         "allocator": {"strategy": "stable sorted path_normalized", "prefix": "ev-", "zero_pad": 6, "mapping": allocator.mapping},
         "source_artifacts": [ARTIFACT_PATHS["FILE_INDEX"], ARTIFACT_PATHS["PROVENANCE"]],
         "evidence": evidence,
+        "read_failures": read_failures,
     }
 
 

@@ -304,6 +304,8 @@ def validate_evidence_index_artifact(audit_dir: Path) -> ValidationResult:
         range_required = kind in BYTE_RANGE_REQUIRED_KINDS or item.get("binary_safe") is True
         start = item.get("start_byte")
         end = item.get("end_byte")
+        if (start is not None or end is not None) and item.get("byte_basis") not in {None, "raw_file_bytes"}:
+            errors.append(f"evidence {evidence_id} byte_basis must be raw_file_bytes")
         if range_required and (start is None or end is None):
             errors.append(f"evidence {evidence_id} requires start_byte and end_byte")
             continue

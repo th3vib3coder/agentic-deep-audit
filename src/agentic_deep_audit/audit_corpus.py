@@ -137,6 +137,9 @@ def create_schema(connection: sqlite3.Connection) -> None:
             evidence_ids UNINDEXED,
             tokenize='unicode61'
         );
+        CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+        CREATE INDEX IF NOT EXISTS idx_graph_nodes_label ON graph_nodes(label);
+        CREATE INDEX IF NOT EXISTS idx_files_kind_path ON files(kind, path);
         """
     )
 
@@ -194,16 +197,23 @@ def resolve_audit_file_no_links(audit_dir: Path, path_value: str) -> Path:
     return candidate
 
 
-def text_file_body(repo_path: Path, path_value: str, binary: bool, max_bytes: int = MAX_TEXT_FILE_BODY_BYTES) -> str:
+def text_file_body_result(repo_path: Path, path_value: str, binary: bool, max_bytes: int = MAX_TEXT_FILE_BODY_BYTES) -> tuple[str, str | None]:
     if binary:
-        return ""
+        return "", None
     try:
         path = resolve_repo_file(repo_path, path_value)
         if path is None or not path.is_file():
-            return ""
-        return read_text_auto_capped(path, encoding="utf-8", errors="replace", max_bytes=max_bytes, label="corpus source")
-    except (OSError, FileSizeLimitError):
-        return ""
+            return "", "missing_or_unsafe"
+        return read_text_auto_capped(path, encoding="utf-8", errors="replace", max_bytes=max_bytes, label="corpus source"), None
+    except FileSizeLimitError:
+        return "", "size_limit"
+    except OSError:
+        return "", "read_error"
+
+
+def text_file_body(repo_path: Path, path_value: str, binary: bool, max_bytes: int = MAX_TEXT_FILE_BODY_BYTES) -> str:
+    body, _ = text_file_body_result(repo_path, path_value, binary, max_bytes=max_bytes)
+    return body
 
 
 def redact_text(text: str) -> tuple[str, int]:
@@ -252,14 +262,21 @@ def strict_insert(connection: sqlite3.Connection, table: str, pk_name: str, pk_v
         raise ValueError(f"duplicate {pk_name} in corpus input for {table}: {pk_value}") from exc
 
 
-def populate_files(connection: sqlite3.Connection, file_index: dict[str, Any], repo_path: Path) -> int:
+def fts_source_for_file_record(record: dict[str, Any]) -> str:
+    return "manifest" if str(record.get("kind") or "") == "manifest" else "files"
+
+
+def populate_files(connection: sqlite3.Connection, file_index: dict[str, Any], repo_path: Path, read_failures: list[dict[str, str]] | None = None) -> int:
     count = 0
     for record in file_index.get("records", []) if isinstance(file_index.get("records"), list) else []:
         if not isinstance(record, dict):
             continue
         path_value = record_path(record)
         evidence_ids = [str(item) for item in record.get("evidence_ids") or [] if isinstance(item, str)]
-        body, _ = redact_text(text_file_body(repo_path, path_value, bool(record.get("binary"))))
+        raw_body, failure_reason = text_file_body_result(repo_path, path_value, bool(record.get("binary")))
+        if failure_reason and read_failures is not None:
+            read_failures.append({"path": path_value, "reason": failure_reason})
+        body, _ = redact_text(raw_body)
         strict_insert(
             connection,
             "files",
@@ -268,7 +285,7 @@ def populate_files(connection: sqlite3.Connection, file_index: dict[str, Any], r
             "INSERT INTO files(path, path_normalized, kind, size_bytes, sha256, binary, evidence_ids, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (path_value, str(record.get("path_normalized") or path_value), record.get("kind"), int(record.get("size_bytes") or 0), record.get("sha256"), 1 if record.get("binary") else 0, json_text(evidence_ids), body),
         )
-        insert_fts(connection, "files", path_value, path_value, path_value, body, evidence_ids)
+        insert_fts(connection, fts_source_for_file_record(record), path_value, path_value, path_value, body, evidence_ids)
         count += 1
     return count
 
@@ -389,6 +406,26 @@ def wiki_type(path: Path) -> str:
     return "page"
 
 
+def trusted_wiki_evidence_ids(text: str) -> list[str]:
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if not line.startswith("evidence_ids:"):
+            continue
+        raw_value = line.split(":", 1)[1].strip()
+        try:
+            values = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(values, list):
+            return []
+        return sorted({str(item) for item in values if isinstance(item, str) and re.fullmatch(r"ev-\d{6,}", item)})
+    return []
+
+
 def populate_wiki(connection: sqlite3.Connection, audit_dir: Path) -> int:
     root = audit_dir / "wiki"
     if not root.exists():
@@ -401,7 +438,7 @@ def populate_wiki(connection: sqlite3.Connection, audit_dir: Path) -> int:
         except (OSError, FileSizeLimitError):
             continue
         body, _ = redact_text(raw)
-        evidence_ids = sorted(set(re.findall(r"ev-\d{6,}", body)))
+        evidence_ids = trusted_wiki_evidence_ids(body)
         title = markdown_title(body, path)
         kind = wiki_type(path.relative_to(root))
         strict_insert(
@@ -468,6 +505,17 @@ def no_secret_check(connection: sqlite3.Connection) -> dict[str, Any]:
     return payload
 
 
+def configure_connection_for_bulk_load(connection: sqlite3.Connection) -> None:
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA synchronous=NORMAL")
+    connection.execute("PRAGMA temp_store=MEMORY")
+    connection.execute("PRAGMA cache_size=-64000")
+
+
+def optimize_fts(connection: sqlite3.Connection) -> None:
+    connection.execute("INSERT INTO corpus_fts(corpus_fts) VALUES ('optimize')")
+
+
 def table_counts(connection: sqlite3.Connection) -> dict[str, int]:
     return {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in TABLES}
 
@@ -522,14 +570,18 @@ def run_corpus(run_config: dict[str, Any], audit_dir: Path) -> None:
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     if sqlite_path.exists():
         sqlite_path.unlink()
+    read_failures: list[dict[str, str]] = []
     with closing(sqlite3.connect(sqlite_path)) as connection:
+        configure_connection_for_bulk_load(connection)
         create_schema(connection)
-        populate_files(connection, file_index, repo_path)
+        connection.execute("BEGIN")
+        populate_files(connection, file_index, repo_path, read_failures)
         populate_evidence(connection, evidence_index)
         populate_symbols(connection, symbol_index)
         populate_claims(connection, evidence_index)
         populate_graph(connection, graph)
         populate_wiki(connection, audit_dir)
+        optimize_fts(connection)
         counts = table_counts(connection)
         secret_check = no_secret_check(connection)
         connection.commit()
@@ -545,19 +597,20 @@ def run_corpus(run_config: dict[str, Any], audit_dir: Path) -> None:
             "table_counts": counts,
             "source_artifact_hashes": source_artifact_hashes(audit_dir),
             "no_secret_check": secret_check,
+            "read_failures": read_failures,
             "rrf": rrf_config(run_config),
         },
     )
 
 
 def fts_query(value: str) -> str:
-    tokens = re.findall(r"[A-Za-z0-9_./:-]+", value[:200])
-    return " OR ".join(tokens[:8]) if tokens else value
+    tokens = re.findall(r"[A-Za-z0-9_]+", value[:200])
+    return " OR ".join(f'"{token}"' for token in tokens[:8])
 
 
 def like_query(value: str) -> str:
     escaped = value[:200].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    return f"{escaped}%"
 
 
 def evidence_ranges(connection: sqlite3.Connection, evidence_ids: list[str]) -> list[dict[str, Any]]:
@@ -572,16 +625,15 @@ def evidence_ranges(connection: sqlite3.Connection, evidence_ids: list[str]) -> 
 def ranked_source_rows(connection: sqlite3.Connection, query: str, limit: int) -> dict[str, list[dict[str, Any]]]:
     rows: dict[str, list[dict[str, Any]]] = {"fts": [], "symbol": [], "graph": [], "manifest": []}
     fts = fts_query(query)
-    if fts and re.search(r"[A-Za-z0-9_./:-]", fts):
+    if fts:
         for rank, row in enumerate(connection.execute("SELECT source, source_id, path, title, evidence_ids, bm25(corpus_fts) AS score FROM corpus_fts WHERE corpus_fts MATCH ? ORDER BY score LIMIT ?", (fts, limit)).fetchall(), start=1):
             rows["fts"].append({"rank": rank, "id": f"{row[0]}:{row[1]}", "source": row[0], "source_id": row[1], "path": row[2], "title": row[3], "evidence_ids": json.loads(row[4] or "[]")})
-    like = like_query(query)
-    for rank, row in enumerate(connection.execute("SELECT symbol_id, name, path, evidence_ids FROM symbols WHERE name LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' LIMIT ?", (like, like, limit)).fetchall(), start=1):
-        rows["symbol"].append({"rank": rank, "id": f"symbols:{row[0]}", "source": "symbols", "source_id": row[0], "path": row[2], "title": row[1], "evidence_ids": json.loads(row[3] or "[]")})
-    for rank, row in enumerate(connection.execute("SELECT node_id, label, path, evidence_ids FROM graph_nodes WHERE node_id LIKE ? ESCAPE '\\' OR label LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' LIMIT ?", (like, like, like, limit)).fetchall(), start=1):
-        rows["graph"].append({"rank": rank, "id": f"graph:{row[0]}", "source": "graph", "source_id": row[0], "path": row[2] or "", "title": row[1], "evidence_ids": json.loads(row[3] or "[]")})
-    for rank, row in enumerate(connection.execute("SELECT path, kind, evidence_ids FROM files WHERE kind = 'manifest' AND body LIKE ? ESCAPE '\\' LIMIT ?", (like, limit)).fetchall(), start=1):
-        rows["manifest"].append({"rank": rank, "id": f"manifest:{row[0]}", "source": "files", "source_id": row[0], "path": row[0], "title": row[1], "evidence_ids": json.loads(row[2] or "[]")})
+        for rank, row in enumerate(connection.execute("SELECT s.symbol_id, s.name, s.path, s.evidence_ids, bm25(corpus_fts) AS score FROM corpus_fts JOIN symbols s ON s.symbol_id = corpus_fts.source_id WHERE corpus_fts MATCH ? AND corpus_fts.source = 'symbols' ORDER BY score LIMIT ?", (fts, limit)).fetchall(), start=1):
+            rows["symbol"].append({"rank": rank, "id": f"symbols:{row[0]}", "source": "symbols", "source_id": row[0], "path": row[2], "title": row[1], "evidence_ids": json.loads(row[3] or "[]")})
+        for rank, row in enumerate(connection.execute("SELECT n.node_id, n.label, n.path, n.evidence_ids, bm25(corpus_fts) AS score FROM corpus_fts JOIN graph_nodes n ON n.node_id = corpus_fts.source_id WHERE corpus_fts MATCH ? AND corpus_fts.source = 'graph' ORDER BY score LIMIT ?", (fts, limit)).fetchall(), start=1):
+            rows["graph"].append({"rank": rank, "id": f"graph:{row[0]}", "source": "graph", "source_id": row[0], "path": row[2] or "", "title": row[1], "evidence_ids": json.loads(row[3] or "[]")})
+        for rank, row in enumerate(connection.execute("SELECT f.path, f.kind, f.evidence_ids, bm25(corpus_fts) AS score FROM corpus_fts JOIN files f ON f.path = corpus_fts.source_id WHERE corpus_fts MATCH ? AND corpus_fts.source = 'manifest' ORDER BY score LIMIT ?", (fts, limit)).fetchall(), start=1):
+            rows["manifest"].append({"rank": rank, "id": f"manifest:{row[0]}", "source": "manifest", "source_id": row[0], "path": row[0], "title": row[1], "evidence_ids": json.loads(row[2] or "[]")})
     return rows
 
 

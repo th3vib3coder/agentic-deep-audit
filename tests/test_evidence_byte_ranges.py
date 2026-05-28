@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from agentic_deep_audit import audit_evidence
-from agentic_deep_audit.audit_evidence import build_text_view, detect_line_ending, sha256_range, validate_claims_reach_evidence
+from agentic_deep_audit.audit_evidence import build_text_view, detect_line_ending, evidence_for_records, sha256_range, validate_claims_reach_evidence
 from agentic_deep_audit.audit_validate import validate_audit, validate_evidence_index_artifact
 from agentic_deep_audit.audit_validate_evidence import collect_secret_paths, collect_unreachable_evidence_ids
 from agentic_deep_audit.models import ARTIFACT_PATHS
@@ -127,6 +127,47 @@ def test_evidence_ids_are_stable_zero_padded_and_recorded(tmp_path: Path) -> Non
     assert first["allocator"]["mapping"][0]["evidence_id"] == "ev-000001"
 
 
+def test_evidence_build_rejects_path_traversal_without_reading_outside_repo(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "safe.txt").write_text("safe\n", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+    records = [
+        {"path": "../outside.txt", "path_normalized": "../outside.txt", "kind": "text", "binary": False},
+        {"path": "safe.txt", "path_normalized": "safe.txt", "kind": "text", "binary": False},
+    ]
+
+    payload = evidence_for_records(records, repo, {"repo": {}})
+
+    assert [item["path"] for item in payload["evidence"]] == ["safe.txt"]
+    assert payload["read_failures"] == [{"path": "../outside.txt", "reason": "PermissionError"}]
+
+
+def test_evidence_build_records_read_failures_without_aborting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ok.txt").write_text("ok\n", encoding="utf-8")
+    (repo / "bad.txt").write_text("bad\n", encoding="utf-8")
+    real_reader = audit_evidence.read_file_bytes
+
+    def flaky_reader(path: Path) -> bytes:
+        if path.name == "bad.txt":
+            raise OSError("simulated IO failure")
+        return real_reader(path)
+
+    monkeypatch.setattr(audit_evidence, "read_file_bytes", flaky_reader)
+    records = [
+        {"path": "bad.txt", "path_normalized": "bad.txt", "kind": "text", "binary": False},
+        {"path": "ok.txt", "path_normalized": "ok.txt", "kind": "text", "binary": False},
+    ]
+
+    payload = evidence_for_records(records, repo, {"repo": {}})
+
+    assert [item["path"] for item in payload["evidence"]] == ["ok.txt"]
+    assert payload["read_failures"] == [{"path": "bad.txt", "reason": "OSError"}]
+
+
 def test_crlf_text_evidence_preserves_line_metadata_and_byte_seek(tmp_path: Path) -> None:
     repo, audit_dir = run_inventory(tmp_path)
     evidence = by_path(load_evidence(audit_dir))["docs/crlf.txt"]
@@ -138,6 +179,7 @@ def test_crlf_text_evidence_preserves_line_metadata_and_byte_seek(tmp_path: Path
     assert evidence["end_line"] == 2
     assert evidence["start_byte"] == 0
     assert evidence["end_byte"] == len(data)
+    assert evidence["byte_basis"] == "raw_file_bytes"
     assert sha256_range(data, evidence["start_byte"], evidence["end_byte"]) == evidence["sha256"]
     assert hashlib.sha256(data[evidence["start_byte"] : evidence["end_byte"]]).hexdigest() == evidence["sha256"]
 
@@ -178,6 +220,7 @@ def test_binary_evidence_has_byte_range_and_no_line_range(tmp_path: Path) -> Non
     assert "end_line" not in evidence
     assert evidence["start_byte"] == 0
     assert evidence["end_byte"] == len(data)
+    assert evidence["byte_basis"] == "raw_file_bytes"
     assert evidence["sha256"] == hashlib.sha256(data).hexdigest()
 
 
@@ -192,6 +235,19 @@ def test_tampered_evidence_hash_fails_validation(tmp_path: Path) -> None:
 
     assert not validation.ok
     assert any("sha256 mismatch" in error for error in validation.errors)
+
+
+def test_evidence_validation_rejects_unknown_byte_basis(tmp_path: Path) -> None:
+    _, audit_dir = run_inventory(tmp_path)
+    path = audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]
+    payload = load_evidence(audit_dir)
+    payload["evidence"][0]["byte_basis"] = "normalized_text_bytes"
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    validation = validate_evidence_index_artifact(audit_dir)
+
+    assert not validation.ok
+    assert any("byte_basis must be raw_file_bytes" in error for error in validation.errors)
 
 
 def test_evidence_validation_rejects_file_line_missing_byte_range(tmp_path: Path) -> None:

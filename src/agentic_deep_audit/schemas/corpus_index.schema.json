@@ -114,6 +114,25 @@
         }
       }
     },
+    "read_failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "reason"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "rrf": {
       "type": "object",
       "required": [

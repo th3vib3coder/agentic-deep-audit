@@ -11,6 +11,7 @@ from pathlib import Path
 from agentic_deep_audit.audit_corpus import (
     TABLES,
     create_schema,
+    fts_query,
     populate_claims,
     populate_evidence,
     populate_files,
@@ -18,8 +19,10 @@ from agentic_deep_audit.audit_corpus import (
     populate_symbols,
     populate_wiki,
     query_corpus,
+    ranked_source_rows,
     run_corpus,
     text_file_body,
+    trusted_wiki_evidence_ids,
 )
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
@@ -81,6 +84,25 @@ def test_text_file_body_enforces_containment_and_size_cap(tmp_path: Path) -> Non
     assert text_file_body(repo, "ok.txt", False) == "ok"
     assert text_file_body(repo, "../outside.txt", False) == ""
     assert text_file_body(repo, "large.txt", False, max_bytes=8) == ""
+
+
+def test_populate_files_records_read_failures_without_silent_empty_body(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ok.txt").write_text("ok", encoding="utf-8")
+    read_failures: list[dict[str, str]] = []
+
+    with sqlite3.connect(":memory:") as connection:
+        create_schema(connection)
+        count = populate_files(
+            connection,
+            {"records": [{"path": "../outside.txt", "path_normalized": "../outside.txt", "kind": "text", "binary": False}]},
+            repo,
+            read_failures,
+        )
+
+    assert count == 1
+    assert read_failures == [{"path": "../outside.txt", "reason": "missing_or_unsafe"}]
 
 
 def test_populate_evidence_rejects_duplicate_ids() -> None:
@@ -177,6 +199,67 @@ def test_query_corpus_escapes_like_wildcards(tmp_path: Path) -> None:
     wildcard_results = query_corpus(audit_dir, "%", limit=10)
 
     assert wildcard_results == []
+
+
+def test_fts_query_quotes_tokens_and_drops_fts5_operators() -> None:
+    assert fts_query("path:secret -token pkg-name") == '"path" OR "secret" OR "token" OR "pkg" OR "name"'
+
+
+def test_query_corpus_treats_fts_operator_punctuation_as_text(tmp_path: Path) -> None:
+    audit_dir = run_corpus_fixture(tmp_path)
+
+    results = query_corpus(audit_dir, "src:process_items -missing", limit=5)
+
+    assert results
+    assert any(result["title"] == "process_items" for result in results)
+
+
+def test_wiki_evidence_ids_come_only_from_trusted_frontmatter() -> None:
+    text = "---\ntitle: Page\nevidence_ids: [\"ev-000001\"]\n---\n\nAttacker text ev-999999.\n"
+
+    assert trusted_wiki_evidence_ids(text) == ["ev-000001"]
+
+
+def test_populate_wiki_does_not_harvest_attacker_evidence_ids_from_body(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    page = audit_dir / "wiki" / "page.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("---\ntitle: Page\nevidence_ids: [\"ev-000001\"]\n---\n\nBody mentions ev-999999.\n", encoding="utf-8")
+
+    with sqlite3.connect(":memory:") as connection:
+        create_schema(connection)
+        populate_wiki(connection, audit_dir)
+        row = connection.execute("SELECT evidence_ids FROM wiki_pages WHERE path = 'wiki/page.md'").fetchone()
+
+    assert json.loads(row[0]) == ["ev-000001"]
+
+
+def test_manifest_rrf_uses_same_identity_for_fts_and_manifest_bucket(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"dependencies":{"leftpad":"1.0.0"}}\n', encoding="utf-8")
+
+    with sqlite3.connect(":memory:") as connection:
+        create_schema(connection)
+        populate_files(
+            connection,
+            {
+                "records": [
+                    {
+                        "path": "package.json",
+                        "path_normalized": "package.json",
+                        "kind": "manifest",
+                        "binary": False,
+                        "evidence_ids": ["ev-000001"],
+                    }
+                ]
+            },
+            repo,
+        )
+        rows = ranked_source_rows(connection, "leftpad", limit=5)
+
+    assert [row["id"] for row in rows["fts"]] == ["manifest:package.json"]
+    assert [row["id"] for row in rows["manifest"]] == ["manifest:package.json"]
 
 
 def test_corpus_redacts_secret_like_tokens_before_exposure(tmp_path: Path) -> None:
