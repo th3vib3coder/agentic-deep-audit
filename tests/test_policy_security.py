@@ -8,7 +8,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from agentic_deep_audit.mcp_policy import redact_host_metadata
+from agentic_deep_audit.mcp_policy import looks_secret, redact_host_metadata
 from agentic_deep_audit.models import PLUGIN_ROOT
 from agentic_deep_audit.policy import decide_command, decide_network, load_blocked_commands_policy, load_default_network_policy
 from agentic_deep_audit.sanitize import sanitize_markdown
@@ -36,6 +36,19 @@ def test_default_network_policy_blocks_without_explicit_snapshot() -> None:
 
     assert policy["default"] == "deny"
     assert decide_network("api.github.com").decision == "block"
+
+
+def test_mcp_secret_detection_covers_common_provider_tokens() -> None:
+    samples = [
+        "sk-ant-api03-abcdefghijklmnopqrstuvwx",
+        "sk-proj-abcdefghijklmnopqrstuvwxyz123456",
+        "sk_live_abcdefghijklmnopqrstuvwxyz",
+        "xoxb-123456789012-abcdefghijklmnop",
+        "AIzaSyAabcdefghijklmnopqrstuvwx",
+        "glpat-abcdefghijklmnopQRST",
+    ]
+
+    assert all(looks_secret(sample) for sample in samples)
 
 
 def test_target_repo_manifest_command_is_denied() -> None:

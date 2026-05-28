@@ -38,6 +38,7 @@ SCHEMA_BY_ARTIFACT_KEY = {
     "AUDIT_RUNTIME_METRICS": "audit_runtime_metrics",
     "BINARY_ARTIFACTS": "binary_artifacts",
     "CORPUS_INDEX": "corpus_index",
+    "MCP_CONFIG": "mcp_config",
 }
 
 SCHEMA_EXEMPT_ARTIFACT_KEYS = {
@@ -48,7 +49,6 @@ SCHEMA_EXEMPT_ARTIFACT_KEYS = {
     "GRAPH_NODES",
     "GRAPHIFY_GRAPH",
     "MANIFESTS",
-    "MCP_CONFIG",
     "PROVENANCE",
     "SBOM",
     "VALIDATION_REPORT_JSON",

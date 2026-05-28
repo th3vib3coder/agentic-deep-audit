@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Generated MCP Config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mcpServers"
+  ],
+  "properties": {
+    "mcpServers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentic_deep_audit"
+      ],
+      "properties": {
+        "agentic_deep_audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command",
+            "args",
+            "env",
+            "read_only",
+            "tools",
+            "resources"
+          ],
+          "properties": {
+            "command": {
+              "const": "python"
+            },
+            "args": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "-m"
+                },
+                {
+                  "const": "agentic_deep_audit.mcp_readonly_server"
+                },
+                {
+                  "const": "--audit-dir"
+                },
+                {
+                  "const": "${AGENTIC_DEEP_AUDIT_AUDIT_DIR}"
+                }
+              ],
+              "minItems": 4,
+              "maxItems": 4,
+              "items": false
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "AGENTIC_DEEP_AUDIT_AUDIT_DIR"
+              ],
+              "properties": {
+                "AGENTIC_DEEP_AUDIT_AUDIT_DIR": {
+                  "const": "${AGENTIC_DEEP_AUDIT_AUDIT_DIR}"
+                }
+              }
+            },
+            "read_only": {
+              "const": true
+            },
+            "tools": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "read_only"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "enum": [
+                      "agentic_deep_audit_audit_query",
+                      "agentic_deep_audit_artifact_read",
+                      "agentic_deep_audit_graph_neighbors",
+                      "agentic_deep_audit_wiki_page"
+                    ]
+                  },
+                  "read_only": {
+                    "const": true
+                  }
+                }
+              }
+            },
+            "resources": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "path",
+                  "read_only"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "enum": [
+                      "agentic_deep_audit_corpus",
+                      "agentic_deep_audit_graph",
+                      "agentic_deep_audit_wiki_home"
+                    ]
+                  },
+                  "path": {
+                    "type": "string",
+                    "enum": [
+                      "CORPUS_INDEX.json",
+                      "graph/graph.json",
+                      "wiki/000_home.md"
+                    ]
+                  },
+                  "read_only": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

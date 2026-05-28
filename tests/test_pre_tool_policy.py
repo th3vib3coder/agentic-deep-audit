@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -14,6 +15,15 @@ from agentic_deep_audit.sanitize import sanitize_markdown
 
 SRC_ROOT = PLUGIN_ROOT / "src"
 FIXTURE_ROOT = PLUGIN_ROOT / "tests" / "fixtures"
+
+
+def load_pre_tool_policy_module():
+    spec = importlib.util.spec_from_file_location("pre_tool_policy_under_test", PLUGIN_ROOT / "hooks" / "pre_tool_policy.py")
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_blocked_command_attempt_fixture_logs_non_empty_attempt(tmp_path: Path) -> None:
@@ -132,6 +142,15 @@ def test_host_pre_tool_event_blocks_unbalanced_shell_command(tmp_path: Path) -> 
 
     assert result.returncode == 2
     assert attempts["attempts"][0]["command"] == ["__invalid_command__"]
+
+
+def test_host_pre_tool_event_fails_closed_before_tokenizing_when_import_broken(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_pre_tool_policy_module()
+    monkeypatch.setattr(module, "IMPORT_ERROR", RuntimeError("broken import"))
+    monkeypatch.delattr(module, "command_tokens_from_text", raising=False)
+    event = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": "npm test", "audit_dir": str(tmp_path / "audit")}}
+
+    assert module.run_event_decision(event) == 2
 
 
 def test_blocked_attempt_append_keeps_repeated_same_command_attempts(tmp_path: Path) -> None:

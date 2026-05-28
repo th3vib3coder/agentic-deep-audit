@@ -10,6 +10,12 @@ from urllib.parse import urlparse
 SECRET_PATTERNS = [
     re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
     re.compile(r"ghp_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]+"),
+    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bsk-proj-[A-Za-z0-9_-]{16,}\b|\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{12,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
     re.compile(r"\bBearer\s+\S{8,}\b", re.IGNORECASE),
 ]

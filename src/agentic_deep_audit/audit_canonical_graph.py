@@ -16,6 +16,20 @@ NODE_TYPES = {"repo", "module", "symbol", "feature", "pattern", "risk", "reuse",
 EDGE_TYPES = {"contains", "depends_on", "implements", "documents", "evidences", "risks", "reuses"}
 EVIDENCE_RE = re.compile(r"ev-\d{6,}")
 
+# B08: the single canonical root node id, referenced from every layer. A constant prevents
+# the literal drifting and documents the (current) single-repo assumption in one place.
+REPO_NODE_ID = "repo:target"
+
+
+class CanonicalGraphError(ValueError):
+    """Raised when a node/edge is constructed with a type outside the closed contract."""
+
+
+def normalize_graph_path(value: Any) -> str:
+    # B09: canonical node ids must use POSIX separators so a Windows-produced symbol path
+    # (src\foo.py) still resolves to its module node (module:src/foo.py) instead of dangling.
+    return str(value).replace("\\", "/")
+
 
 def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -76,7 +90,9 @@ def evidence_by_path(evidence_index: dict[str, Any]) -> dict[str, list[str]]:
 
 def add_node(nodes: dict[str, dict[str, Any]], node_id: str, node_type: str, label: str, evidence_ids: list[str] | None = None, **extra: Any) -> None:
     if node_type not in NODE_TYPES:
-        node_type = "artifact"
+        # B06: silently relabelling an unknown node type to "artifact" hid contract drift and
+        # passed schema validation on laundered data. Fail loud so the caller is fixed.
+        raise CanonicalGraphError(f"unknown canonical node type: {node_type!r}")
     existing = nodes.get(node_id)
     if existing is None:
         nodes[node_id] = {
@@ -101,7 +117,8 @@ def add_edge(
     dynamic: bool = False,
 ) -> None:
     if edge_type not in EDGE_TYPES:
-        edge_type = "documents"
+        # B06: silently relabelling an unknown edge type to "documents" hid contract drift.
+        raise CanonicalGraphError(f"unknown canonical edge type: {edge_type!r}")
     key = (source, target, edge_type)
     existing = edges.get(key)
     if existing is None:
@@ -115,6 +132,11 @@ def add_edge(
             "evidence_ids": sorted(set(evidence_ids or [])),
         }
         return
+    # B03 canonical mirror: duplicate source/target/type edges from distinct sites must preserve
+    # total signal instead of keeping whichever import site happened to arrive first.
+    existing["weight"] = float(existing.get("weight") or 0.0) + float(weight)
+    existing["conditional"] = bool(existing.get("conditional")) or bool(conditional)
+    existing["dynamic"] = bool(existing.get("dynamic")) or bool(dynamic)
     existing["evidence_ids"] = sorted(set(existing.get("evidence_ids", [])) | set(evidence_ids or []))
 
 
@@ -137,7 +159,7 @@ def add_file_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: dic
         node_id = artifact_node_id(f"file:{path}")
         evidence_ids = evidence_lookup.get(path, [])
         add_node(nodes, node_id, "artifact", path, evidence_ids, artifact_kind="file", path=path)
-        add_edge(edges, "repo:target", node_id, "contains", evidence_ids)
+        add_edge(edges, REPO_NODE_ID, node_id, "contains", evidence_ids)
 
 
 def add_module_and_symbol_nodes(
@@ -156,7 +178,7 @@ def add_module_and_symbol_nodes(
         source_type = str(node.get("type") or "")
         if source_type == "module":
             add_node(nodes, node_id, "module", str(node.get("path") or node_id), evidence_ids, path=node.get("path"))
-            add_edge(edges, "repo:target", node_id, "contains", evidence_ids)
+            add_edge(edges, REPO_NODE_ID, node_id, "contains", evidence_ids)
         else:
             add_node(nodes, node_id, "artifact", str(node.get("path") or node_id), evidence_ids, artifact_kind=source_type or "dependency")
     for symbol in symbol_index.get("symbols", []) if isinstance(symbol_index.get("symbols"), list) else []:
@@ -166,7 +188,7 @@ def add_module_and_symbol_nodes(
         evidence_ids = [str(item) for item in symbol.get("evidence_ids", []) if isinstance(item, str)]
         add_node(nodes, node_id, "symbol", str(symbol.get("name") or node_id), evidence_ids, path=symbol.get("path"), kind=symbol.get("kind"))
         if symbol.get("path"):
-            add_edge(edges, f"module:{symbol['path']}", node_id, "contains", evidence_ids)
+            add_edge(edges, f"module:{normalize_graph_path(symbol['path'])}", node_id, "contains", evidence_ids)
     for edge in module_graph.get("edges", []) if isinstance(module_graph.get("edges"), list) else []:
         if not isinstance(edge, dict) or not edge.get("source") or not edge.get("target"):
             continue
@@ -193,7 +215,7 @@ def add_manifest_dependency_nodes(audit_dir: Path, nodes: dict[str, dict[str, An
         evidence_ids = [str(item) for item in record.get("evidence_ids", []) if isinstance(item, str)]
         manifest_id = artifact_node_id(f"manifest:{record.get('path') or 'unknown'}")
         add_node(nodes, manifest_id, "artifact", str(record.get("path") or "manifest"), evidence_ids, artifact_kind="manifest")
-        add_edge(edges, "repo:target", manifest_id, "contains", evidence_ids)
+        add_edge(edges, REPO_NODE_ID, manifest_id, "contains", evidence_ids)
         for dependency in record.get("dependencies", []) if isinstance(record.get("dependencies"), list) else []:
             if not isinstance(dependency, dict) or not dependency.get("name"):
                 continue
@@ -241,7 +263,7 @@ def add_markdown_concept_nodes(
         for label, evidence_ids in markdown_table_rows(path):
             node_id = f"{node_type}:{stable_slug(label)}"
             add_node(nodes, node_id, node_type, label, evidence_ids, source_artifact=artifact)
-            add_edge(edges, "repo:target", node_id, edge_type, evidence_ids)
+            add_edge(edges, REPO_NODE_ID, node_id, edge_type, evidence_ids)
 
 
 def add_risk_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: dict[tuple[str, str, str], dict[str, Any]], source_artifacts: set[str]) -> None:
@@ -258,7 +280,7 @@ def add_risk_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: dic
             evidence_ids = [str(value) for value in item.get("evidence_ids", []) if isinstance(value, str)]
             node_id = f"risk:{stable_slug(identifier)}"
             add_node(nodes, node_id, "risk", identifier, evidence_ids, severity=item.get("severity"), source_artifact=artifact)
-            add_edge(edges, node_id, "repo:target", "risks", evidence_ids)
+            add_edge(edges, node_id, REPO_NODE_ID, "risks", evidence_ids)
 
 
 def add_reuse_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: dict[tuple[str, str, str], dict[str, Any]], source_artifacts: set[str]) -> None:
@@ -274,7 +296,7 @@ def add_reuse_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: di
         evidence_ids = [str(value) for value in card.get("evidence_ids", []) if isinstance(value, str)]
         node_id = f"reuse:{stable_slug(identifier)}"
         add_node(nodes, node_id, "reuse", str(card.get("name") or identifier), evidence_ids, decision=card.get("decision"), source_artifact=artifact)
-        add_edge(edges, "repo:target", node_id, "reuses", evidence_ids)
+        add_edge(edges, REPO_NODE_ID, node_id, "reuses", evidence_ids)
 
 
 def add_wiki_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: dict[tuple[str, str, str], dict[str, Any]], source_artifacts: set[str]) -> None:
@@ -291,14 +313,14 @@ def add_wiki_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: dic
         evidence_ids = evidence_from_text(text)
         node_id = artifact_node_id(f"wiki:{relative}")
         add_node(nodes, node_id, "artifact", relative, evidence_ids, artifact_kind="wiki_page", path=relative)
-        add_edge(edges, node_id, "repo:target", "documents", evidence_ids)
+        add_edge(edges, node_id, REPO_NODE_ID, "documents", evidence_ids)
 
 
 def build_canonical_graph(audit_dir: Path, run_config: dict[str, Any], module_graph: dict[str, Any], symbol_index: dict[str, Any]) -> dict[str, Any]:
     nodes: dict[str, dict[str, Any]] = {}
     edges: dict[tuple[str, str, str], dict[str, Any]] = {}
     source_artifacts: set[str] = set()
-    add_node(nodes, "repo:target", "repo", "target", [])
+    add_node(nodes, REPO_NODE_ID, "repo", "target", [])
     add_file_nodes(audit_dir, nodes, edges, source_artifacts)
     add_manifest_dependency_nodes(audit_dir, nodes, edges, source_artifacts)
     add_module_and_symbol_nodes(nodes, edges, module_graph, symbol_index, source_artifacts)
@@ -309,6 +331,10 @@ def build_canonical_graph(audit_dir: Path, run_config: dict[str, Any], module_gr
     graph_nodes = sorted(nodes.values(), key=lambda item: item["id"])
     node_ids = {node["id"] for node in graph_nodes}
     graph_edges = sorted((edge for edge in edges.values() if edge["source"] in node_ids and edge["target"] in node_ids), key=lambda item: (item["source"], item["target"], item["type"]))
+    # B15: an edge whose endpoint never became a node (e.g. a symbol path that did not match any
+    # module node) was silently discarded. Record how many were dropped so the validator and
+    # downstream consumers can tell "no orphan edges" from "orphans hidden".
+    dropped_edges = sum(1 for edge in edges.values() if edge["source"] not in node_ids or edge["target"] not in node_ids)
     return {
         "schema_version": "1.0",
         "repo": run_config.get("repo") or {},
@@ -319,6 +345,7 @@ def build_canonical_graph(audit_dir: Path, run_config: dict[str, Any], module_gr
             "derived_exports": [ARTIFACT_PATHS["GRAPH_NODES"], ARTIFACT_PATHS["GRAPH_EDGES"]],
             "node_count": len(graph_nodes),
             "edge_count": len(graph_edges),
+            "dropped_edge_count": dropped_edges,
         },
     }
 

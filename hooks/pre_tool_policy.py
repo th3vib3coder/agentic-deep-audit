@@ -152,6 +152,9 @@ def run_decision(command: list[str], origin: str, audit_dir: Path, block_code: i
 
 
 def run_event_decision(event: dict, strict_runtime: bool = False) -> int:
+    runtime_error = verify_runtime_ready(strict=strict_runtime or os.environ.get("AGENTIC_DEEP_AUDIT_HOOK_STRICT") == "1")
+    if runtime_error is not None:
+        return runtime_error
     command = command_from_event(event)
     event_attempt_id = blocked_attempt_event_id(event) if blocked_attempt_event_id is not None else None
     if command:
@@ -159,9 +162,6 @@ def run_event_decision(event: dict, strict_runtime: bool = False) -> int:
     tool_name = str(event.get("tool_name") or "")
     if tool_requires_policy(tool_name):
         return run_decision(["__tool__", tool_name or "<unknown>"], "host_pre_tool", audit_dir_from_event(event), block_code=2, strict_runtime=strict_runtime, attempt_id=event_attempt_id)
-    runtime_error = verify_runtime_ready(strict=strict_runtime or os.environ.get("AGENTIC_DEEP_AUDIT_HOOK_STRICT") == "1")
-    if runtime_error is not None:
-        return runtime_error
     print("allowed")
     return 0
 

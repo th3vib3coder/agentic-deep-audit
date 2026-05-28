@@ -202,7 +202,7 @@ def test_inventory_markdown_derives_counts_and_root_docs(tmp_path: Path) -> None
     assert "| SECURITY | missing |  |" in inventory
     assert "| .git/config | excluded by .git/** |" in inventory
     assert "| node_modules/pkg/index.js | excluded by node_modules/** |" in inventory
-    assert "- Binary file count: 1" in inventory
+    assert f"- Binary file count: {counts['binary']}" in inventory
 
 
 def test_evidence_index_has_reachable_root_docs_and_file_records(tmp_path: Path) -> None:

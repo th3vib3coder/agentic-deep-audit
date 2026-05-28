@@ -16,9 +16,13 @@ FIXTURE_ROOT = PLUGIN_ROOT / "tests" / "fixtures"
 RAW_SECRET_MARKERS = ["eyJ", "ghp_", "AKIA", "Bearer abcdefghij", "Abcdef1234567890QRSTuvwx"]
 
 
-def cli_env() -> dict[str, str]:
+def cli_env(home: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(SRC_ROOT)
+    if home is not None:
+        home.mkdir(parents=True, exist_ok=True)
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
     return env
 
 
@@ -29,7 +33,7 @@ def copy_fixture(tmp_path: Path, name: str) -> Path:
 
 
 def run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, "-m", "agentic_deep_audit.cli", *args], cwd=cwd, env=cli_env(), check=False, text=True, capture_output=True)
+    return subprocess.run([sys.executable, "-m", "agentic_deep_audit.cli", *args], cwd=cwd, env=cli_env(cwd / ".home"), check=False, text=True, capture_output=True)
 
 
 def test_mcp_collision_detected_fixture_blocks_generated_config(tmp_path: Path) -> None:

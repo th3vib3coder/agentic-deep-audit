@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .audit_canonical_graph import EDGE_TYPES, NODE_TYPES, stable_slug
+from .audit_canonical_graph import EDGE_TYPES, NODE_TYPES, REPO_NODE_ID, normalize_graph_path, stable_slug
 from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
@@ -92,17 +92,31 @@ def validate_edge(index: int, edge: Any, node_ids: set[str], available: set[str]
     return (str(source), str(target), str(edge_type)) if isinstance(source, str) and isinstance(target, str) and isinstance(edge_type, str) else None
 
 
+def recompose_mismatch_sample(canonical: list[dict[str, Any]], derived: list[dict[str, Any]]) -> str:
+    # B11: only invoked on a hash mismatch; builds a tiny symmetric-difference preview so the
+    # operator can locate the drift without us serializing the whole graph into a set on success.
+    canonical_keys = {json.dumps(item, sort_keys=True) for item in canonical}
+    derived_keys = {json.dumps(item, sort_keys=True) for item in derived}
+    only_canonical = sorted(canonical_keys - derived_keys)[:3]
+    only_derived = sorted(derived_keys - canonical_keys)[:3]
+    if not only_canonical and not only_derived and len(canonical) == len(derived):
+        return " (same items, different order)"
+    return f" (missing_from_derived={only_canonical}; unexpected_in_derived={only_derived})"
+
+
 def validate_derived_exports(audit_dir: Path, graph: dict[str, Any], errors: list[str]) -> None:
     nodes_payload = load_json(audit_dir / ARTIFACT_PATHS["GRAPH_NODES"], errors)
     edges_payload = load_json(audit_dir / ARTIFACT_PATHS["GRAPH_EDGES"], errors)
-    canonical_nodes = {json.dumps(node, sort_keys=True) for node in graph.get("nodes", []) if isinstance(node, dict)}
-    canonical_edges = {json.dumps(edge, sort_keys=True) for edge in graph.get("edges", []) if isinstance(edge, dict)}
-    derived_nodes = {json.dumps(node, sort_keys=True) for node in nodes_payload.get("nodes", []) if isinstance(node, dict)}
-    derived_edges = {json.dumps(edge, sort_keys=True) for edge in edges_payload.get("edges", []) if isinstance(edge, dict)}
-    if derived_nodes != canonical_nodes:
-        errors.append("graph/nodes.json does not recompose canonical graph node set")
-    if derived_edges != canonical_edges:
-        errors.append("graph/edges.json does not recompose canonical graph edge set")
+    canonical_nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+    canonical_edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+    derived_nodes = [node for node in nodes_payload.get("nodes", []) if isinstance(node, dict)]
+    derived_edges = [edge for edge in edges_payload.get("edges", []) if isinstance(edge, dict)]
+    # B11: derived exports are written in canonical order, so an order-sensitive hash compare is
+    # correct and O(1) memory versus holding four fully-serialized sets for the common pass case.
+    if sha256_json(canonical_nodes) != sha256_json(derived_nodes):
+        errors.append("graph/nodes.json does not recompose canonical graph node set" + recompose_mismatch_sample(canonical_nodes, derived_nodes))
+    if sha256_json(canonical_edges) != sha256_json(derived_edges):
+        errors.append("graph/edges.json does not recompose canonical graph edge set" + recompose_mismatch_sample(canonical_edges, derived_edges))
 
 
 def validate_renderer_artifacts(audit_dir: Path, errors: list[str]) -> None:
@@ -264,7 +278,7 @@ def markdown_row_labels(path: Path) -> list[str]:
 
 
 def expected_graph_node_ids(audit_dir: Path, errors: list[str]) -> set[str]:
-    expected: set[str] = {"repo:target"}
+    expected: set[str] = {REPO_NODE_ID}
     file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"], errors) if (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).exists() else {}
     for record in file_index.get("records", []) if isinstance(file_index.get("records"), list) else []:
         if isinstance(record, dict):
@@ -319,50 +333,53 @@ def expected_graph_edge_keys(audit_dir: Path, errors: list[str]) -> set[tuple[st
         if isinstance(record, dict):
             path = str(record.get("path_normalized") or record.get("path") or "")
             if path:
-                expected.add(("repo:target", f"artifact:file:{path}", "contains"))
+                expected.add((REPO_NODE_ID, f"artifact:file:{path}", "contains"))
     module_graph = load_json(audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"], errors) if (audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]).exists() else {}
     for node in module_graph.get("nodes", []) if isinstance(module_graph.get("nodes"), list) else []:
         if isinstance(node, dict) and node.get("id") and node.get("type") == "module":
-            expected.add(("repo:target", str(node["id"]), "contains"))
+            expected.add((REPO_NODE_ID, str(node["id"]), "contains"))
     for edge in module_graph.get("edges", []) if isinstance(module_graph.get("edges"), list) else []:
         if isinstance(edge, dict) and edge.get("source") and edge.get("target"):
             expected.add((str(edge["source"]), str(edge["target"]), "depends_on"))
     symbol_index = load_json(audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"], errors) if (audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"]).exists() else {}
     for symbol in symbol_index.get("symbols", []) if isinstance(symbol_index.get("symbols"), list) else []:
         if isinstance(symbol, dict) and symbol.get("symbol_id") and symbol.get("path"):
-            expected.add((f"module:{symbol['path']}", str(symbol["symbol_id"]), "contains"))
+            # TESLA-01: must mirror the builder's B09 normalization, otherwise a Windows-produced
+            # backslash symbol path makes the expected key (raw) diverge from the built edge
+            # (normalized) and the validator falsely reports a missing edge.
+            expected.add((f"module:{normalize_graph_path(symbol['path'])}", str(symbol["symbol_id"]), "contains"))
     manifests = load_json(audit_dir / ARTIFACT_PATHS["MANIFESTS"], errors) if (audit_dir / ARTIFACT_PATHS["MANIFESTS"]).exists() else {}
     for record in manifests.get("records", []) if isinstance(manifests.get("records"), list) else []:
         if not isinstance(record, dict):
             continue
         manifest_id = f"artifact:manifest:{record.get('path') or 'unknown'}"
-        expected.add(("repo:target", manifest_id, "contains"))
+        expected.add((REPO_NODE_ID, manifest_id, "contains"))
         for dependency in record.get("dependencies", []) if isinstance(record.get("dependencies"), list) else []:
             if isinstance(dependency, dict) and dependency.get("name"):
                 dep_id = f"artifact:dependency:{record.get('ecosystem') or 'unknown'}:{dependency['name']}"
                 expected.add((manifest_id, dep_id, "depends_on"))
     for label in markdown_row_labels(audit_dir / ARTIFACT_PATHS["FEATURE_CATALOG"]):
-        expected.add(("repo:target", f"feature:{stable_slug(label)}", "implements"))
+        expected.add((REPO_NODE_ID, f"feature:{stable_slug(label)}", "implements"))
     for label in markdown_row_labels(audit_dir / ARTIFACT_PATHS["PATTERNS"]):
-        expected.add(("repo:target", f"pattern:{stable_slug(label)}", "implements"))
+        expected.add((REPO_NODE_ID, f"pattern:{stable_slug(label)}", "implements"))
     reuse = load_json(audit_dir / ARTIFACT_PATHS["REUSE_CARDS"], errors) if (audit_dir / ARTIFACT_PATHS["REUSE_CARDS"]).exists() else {}
     for card in reuse.get("cards", []) if isinstance(reuse.get("cards"), list) else []:
         if isinstance(card, dict):
             identifier = str(card.get("reuse_id") or card.get("candidate_id") or card.get("name") or "")
             if identifier:
-                expected.add(("repo:target", f"reuse:{stable_slug(identifier)}", "reuses"))
+                expected.add((REPO_NODE_ID, f"reuse:{stable_slug(identifier)}", "reuses"))
     for key, records_key, id_key in [("RISK_FINDINGS", "findings", "finding_id"), ("AGENTIC_SECURITY_FINDINGS", "findings", "finding_id"), ("SUSPICIOUS_BEHAVIORS", "behaviors", "behavior_id")]:
         payload = load_json(audit_dir / ARTIFACT_PATHS[key], errors) if (audit_dir / ARTIFACT_PATHS[key]).exists() else {}
         for item in payload.get(records_key, []) if isinstance(payload.get(records_key), list) else []:
             if isinstance(item, dict):
                 identifier = str(item.get(id_key) or item.get("code") or "")
                 if identifier:
-                    expected.add((f"risk:{stable_slug(identifier)}", "repo:target", "risks"))
+                    expected.add((f"risk:{stable_slug(identifier)}", REPO_NODE_ID, "risks"))
     if (audit_dir / "wiki").exists():
         for path in (audit_dir / "wiki").rglob("*.md"):
             relative = path.relative_to(audit_dir).as_posix()
             if relative not in DERIVED_WIKI_PAGES:
-                expected.add((f"artifact:wiki:{relative}", "repo:target", "documents"))
+                expected.add((f"artifact:wiki:{relative}", REPO_NODE_ID, "documents"))
     return expected
 
 
@@ -441,6 +458,13 @@ def validate_canonical_graph_artifacts(audit_dir: Path, evidence_index: dict[str
         errors.append("graph/graph.json requires edges array")
         graph["edges"] = []
     node_ids = {node_id for index, node in enumerate(graph["nodes"]) if (node_id := validate_node(index, node, available, errors))}
+    # B14: a graph with zero valid nodes, or one missing the invariant root, previously passed
+    # validation. The canonical builder always emits the root node, so its absence means
+    # the graph was truncated or never populated.
+    if not node_ids:
+        errors.append("graph/graph.json contains no valid nodes")
+    elif REPO_NODE_ID not in node_ids:
+        errors.append(f"graph/graph.json missing required root node {REPO_NODE_ID}")
     seen_edges: set[tuple[str, str, str]] = set()
     for index, edge in enumerate(graph["edges"]):
         key = validate_edge(index, edge, node_ids, available, errors)
@@ -451,6 +475,12 @@ def validate_canonical_graph_artifacts(audit_dir: Path, evidence_index: dict[str
     derivations = graph.get("derivations")
     if not isinstance(derivations, dict) or not derivations.get("source_artifacts"):
         errors.append("graph/graph.json derivations.source_artifacts required")
+    elif "dropped_edge_count" in derivations:
+        dropped_count = derivations.get("dropped_edge_count")
+        if isinstance(dropped_count, bool) or not isinstance(dropped_count, int) or dropped_count < 0:
+            errors.append("graph/graph.json derivations.dropped_edge_count must be a non-negative integer")
+        elif dropped_count > 0:
+            errors.append("graph/graph.json derivations.dropped_edge_count must be zero")
     validate_required_source_coverage(audit_dir, graph, errors)
     validate_derived_exports(audit_dir, graph, errors)
     validate_renderer_artifacts(audit_dir, errors)

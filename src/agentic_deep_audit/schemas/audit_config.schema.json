@@ -74,7 +74,19 @@
       "type": [
         "object",
         "null"
-      ]
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "host_config_paths": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      }
     },
     "blocked_tools": {
       "type": "array",

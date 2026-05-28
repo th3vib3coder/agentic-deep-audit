@@ -22,16 +22,34 @@ def load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def load_required_json(path: Path, label: str) -> tuple[dict[str, Any] | None, str | None]:
+    if not path.exists():
+        return None, f"{label} missing"
+    try:
+        payload = read_json_capped(path, label=label)
+    except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
+        return None, f"{label} unreadable or corrupt: {type(exc).__name__}"
+    if not isinstance(payload, dict):
+        return None, f"{label} root must be object"
+    return payload, None
+
+
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def remove_mcp_outputs(audit_dir: Path) -> None:
+    errors: list[str] = []
     for key in ["MCP_CONFIG", "MCP_DEFERRED", "MCP_COLLISION_REPORT"]:
         path = audit_dir / ARTIFACT_PATHS[key]
         if path.exists():
-            path.unlink()
+            try:
+                path.unlink()
+            except OSError as exc:
+                errors.append(f"{ARTIFACT_PATHS[key]} cleanup failed: {type(exc).__name__}")
+    if errors:
+        raise RuntimeError("; ".join(errors))
 
 
 def append_mcp_status(audit_dir: Path, tool: str, status: str, policy: str, reason: str | None = None, output_path: str | None = None) -> None:
@@ -53,9 +71,9 @@ def append_mcp_status(audit_dir: Path, tool: str, status: str, policy: str, reas
 
 
 def corpus_is_valid(audit_dir: Path) -> tuple[bool, str | None]:
-    evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"])
-    if not evidence_index:
-        return False, "EVIDENCE_INDEX.json missing; cannot validate corpus for MCP export"
+    evidence_index, evidence_error = load_required_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"], "EVIDENCE_INDEX.json")
+    if evidence_index is None:
+        return False, f"{evidence_error}; cannot validate corpus for MCP export"
     if not (audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"]).exists():
         return False, "CORPUS_INDEX.json missing; MCP export requires corpus"
     errors = validate_corpus_artifacts(audit_dir, evidence_index)
@@ -75,10 +93,17 @@ def write_deferred(audit_dir: Path, reason: str) -> None:
 def write_collision_report(audit_dir: Path, state: dict[str, Any]) -> None:
     remove_mcp_outputs(audit_dir)
     safe_reason = str(redact_value(str(state.get("reason") or "")))
-    lines = ["# MCP Collision Report", "", f"Reason: {safe_reason}.", "", "## Collisions", ""]
+    title = "MCP Collision Report" if state.get("collisions") else "MCP Blocked Report"
+    lines = [f"# {title}", "", f"Reason: {safe_reason}.", "", "## Collisions", ""]
     for collision in state.get("collisions", []):
         host_path = str(redact_value(str(collision.get("host_path") or "")))
-        lines.append(f"- server `{collision.get('server_name')}` exposes conflicting tool `{collision.get('tool_name')}` from `{host_path}`.")
+        lines.append(f"- server `{collision.get('server_name')}` exposes conflicting {collision.get('kind', 'tool')} `{collision.get('name', collision.get('tool_name'))}` from `{host_path}`.")
+    if not state.get("collisions"):
+        lines.append("- none recorded; host state could not be safely verified.")
+    host_errors = [str(redact_value(str(error))) for error in state.get("host_errors", [])]
+    if host_errors:
+        lines.extend(["", "## Host Read Errors", ""])
+        lines.extend(f"- {error}" for error in host_errors)
     lines.extend(["", "## Host Metadata Read", ""])
     for host in state.get("hosts", []):
         host_path = str(redact_value(str(host.get("host_path") or "")))
@@ -91,7 +116,7 @@ def write_collision_report(audit_dir: Path, state: dict[str, Any]) -> None:
     lines.extend(["", "Recommendation: rename the conflicting host MCP tool before enabling this generated config.", ""])
     path = audit_dir / ARTIFACT_PATHS["MCP_COLLISION_REPORT"]
     path.write_text("\n".join(lines), encoding="utf-8")
-    append_mcp_status(audit_dir, "mcp_export", "blocked", "blocked", str(state.get("reason")), ARTIFACT_PATHS["MCP_COLLISION_REPORT"])
+    append_mcp_status(audit_dir, "mcp_export", "blocked", "blocked", safe_reason, ARTIFACT_PATHS["MCP_COLLISION_REPORT"])
 
 
 def generated_mcp_config() -> dict[str, Any]:
@@ -126,7 +151,11 @@ def run_mcp_export(run_config: dict[str, Any], audit_dir: Path) -> None:
         write_deferred(audit_dir, reason or "corpus unavailable")
         return
     state = read_host_mcp_state(run_config)
-    if state["state"] == "unknown":
+    if state["state"] == "deferred":
+        append_mcp_status(audit_dir, "mcp_collision_check", "deferred", "host_mcp_read_exception", str(state["reason"]))
+        write_deferred(audit_dir, str(state["reason"]))
+        return
+    if state["state"] == "blocked":
         append_mcp_status(audit_dir, "mcp_collision_check", "deferred", "host_mcp_read_exception", str(state["reason"]))
         write_deferred(audit_dir, str(state["reason"]))
         return
@@ -134,5 +163,5 @@ def run_mcp_export(run_config: dict[str, Any], audit_dir: Path) -> None:
         append_mcp_status(audit_dir, "mcp_collision_check", "blocked", "host_mcp_read_exception", str(state["reason"]))
         write_collision_report(audit_dir, state)
         return
-    append_mcp_status(audit_dir, "mcp_collision_check", "completed", "host_mcp_read_exception")
+    append_mcp_status(audit_dir, "mcp_collision_check", "completed", "allowed")
     write_mcp_config(audit_dir)

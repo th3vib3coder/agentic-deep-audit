@@ -11,8 +11,8 @@ import unicodedata
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
-from .audit_corpus import query_corpus
-from .limits import read_text_auto_capped
+from .audit_corpus import query_corpus, redact_text
+from .limits import FileSizeLimitError, read_text_auto_capped
 from .mcp_collision_check import GENERATED_TOOL_NAMES
 from .models import ARTIFACT_PATHS
 
@@ -26,7 +26,15 @@ UNTRUSTED_WARNING = (
 )
 INVISIBLE_CHARS = "\u00ad\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060\u2066\u2067\u2068\u2069\ufeff"
 JAILBREAK_PATTERNS = {
-    "override_marker": re.compile(r"ignore\s+(all\s+)?(previous|prior)|developer\s+instruction|system\s+prompt|do\s+not\s+tell\s+user", re.IGNORECASE),
+    "override_marker": re.compile(
+        r"ignore\s+(all\s+)?(previous|prior)|developer\s+instruction|system\s+prompt|do\s+not\s+tell\s+user"
+        r"|ignora\s+(tutte\s+)?le\s+istruzioni\s+(precedenti|anteriori)"
+        r"|ignorez?\s+(toutes\s+)?les\s+instructions\s+(pr[eé]c[eé]dentes|anterieures)"
+        r"|ignorar\s+(todas\s+)?las\s+instrucciones\s+(previas|anteriores)"
+        r"|ignorar\s+(todas\s+)?as\s+instru[cç][oõ]es\s+anteriores"
+        r"|ignorier\w*\s+(alle\s+)?vorherige\w*\s+anweisung\w*",
+        re.IGNORECASE,
+    ),
     "role_tag": re.compile(r"</?(system|assistant|developer|tool)\b[^>]*>|<\|?\s*(system|assistant|developer|tool)\s*\|?>|\[/?\s*(instruction|system|user|assistant|developer|tool)\b[^\]]*\]", re.IGNORECASE),
     "tool_request": re.compile(
         r"\b(run|execute|call)\s+(a\s+)?(shell|tool|command)\b|\bbash\s+-c\b|\beval\b"
@@ -36,6 +44,15 @@ JAILBREAK_PATTERNS = {
         re.IGNORECASE,
     ),
 }
+DENIED_ARTIFACT_PARTS = {".git", ".hg", ".svn", ".ssh"}
+DENIED_ARTIFACT_NAME_PATTERNS = [
+    re.compile(r"(?i)^\.env(?:\..*)?$"),
+    re.compile(r"(?i).*\.(?:key|pem|p12|pfx)$"),
+    re.compile(r"(?i)^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$"),
+    re.compile(r"(?i).*credentials.*"),
+]
+MAX_TOOL_STRING_LENGTH = 4096
+MAX_JSON_RPC_LINE_LENGTH = 65536
 
 
 def clean_transport_text(value: str) -> str:
@@ -56,10 +73,36 @@ def clean_transport_text(value: str) -> str:
 
 def tool_specs() -> list[dict[str, Any]]:
     return [
-        {"name": "agentic_deep_audit_audit_query", "description": "Query the read-only audit corpus.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}}},
-        {"name": "agentic_deep_audit_artifact_read", "description": "Read an audit-relative artifact.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}},
-        {"name": "agentic_deep_audit_graph_neighbors", "description": "Return neighbors for a canonical graph node.", "inputSchema": {"type": "object", "properties": {"node_id": {"type": "string"}}}},
-        {"name": "agentic_deep_audit_wiki_page", "description": "Read an audit wiki page by audit-relative path.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}},
+        {
+            "name": "agentic_deep_audit_audit_query",
+            "description": "Query the read-only audit corpus.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["query"],
+                "properties": {"query": {"type": "string", "maxLength": MAX_TOOL_STRING_LENGTH}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}},
+            },
+        },
+        {
+            "name": "agentic_deep_audit_artifact_read",
+            "description": "Read an audit-relative artifact.",
+            "inputSchema": {"type": "object", "additionalProperties": False, "required": ["path"], "properties": {"path": {"type": "string", "maxLength": MAX_TOOL_STRING_LENGTH}}},
+        },
+        {
+            "name": "agentic_deep_audit_graph_neighbors",
+            "description": "Return neighbors for a canonical graph node.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["node_id"],
+                "properties": {"node_id": {"type": "string", "maxLength": MAX_TOOL_STRING_LENGTH}},
+            },
+        },
+        {
+            "name": "agentic_deep_audit_wiki_page",
+            "description": "Read an audit wiki page by audit-relative path.",
+            "inputSchema": {"type": "object", "additionalProperties": False, "required": ["path"], "properties": {"path": {"type": "string", "maxLength": MAX_TOOL_STRING_LENGTH}}},
+        },
     ]
 
 
@@ -77,8 +120,21 @@ def resolve_audit_artifact(audit_dir: Path, relative: str) -> Path:
     if not safe_audit_relative_path(relative):
         raise ValueError("path must be audit-relative")
     root = audit_dir.resolve()
-    candidate = (root / relative).resolve()
-    candidate.relative_to(root)
+    raw_candidate = root / relative
+    for part in PurePosixPath(relative).parts:
+        if part in DENIED_ARTIFACT_PARTS or any(pattern.fullmatch(part) for pattern in DENIED_ARTIFACT_NAME_PATTERNS):
+            raise PermissionError("artifact path is not exposed through MCP")
+    current = root
+    for part in PurePosixPath(relative).parts:
+        current = current / part
+        is_junction = getattr(current, "is_junction", lambda: False)
+        if current.is_symlink() or bool(is_junction()):
+            raise PermissionError("artifact path contains symlink")
+    candidate = raw_candidate.resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise PermissionError("artifact path escapes audit directory") from exc
     if not candidate.exists() or not candidate.is_file():
         raise FileNotFoundError(relative)
     return candidate
@@ -87,12 +143,22 @@ def resolve_audit_artifact(audit_dir: Path, relative: str) -> Path:
 def read_text_artifact(audit_dir: Path, relative: str, max_chars: int = 20000) -> dict[str, Any]:
     path = resolve_audit_artifact(audit_dir, relative)
     text = read_text_auto_capped(path, encoding="utf-8", errors="replace", max_bytes=max_chars * 8, label="mcp artifact")
-    return {"path": relative, "text": text[:max_chars]}
+    truncated = len(text) > max_chars
+    stat_result = path.stat()
+    return {"path": relative, "text": text[:max_chars], "truncated": truncated, "total_bytes": stat_result.st_size}
 
 
 def graph_neighbors(audit_dir: Path, node_id: str) -> dict[str, Any]:
     graph_path = audit_dir / ARTIFACT_PATHS["GRAPH"]
-    graph = json.loads(read_text_auto_capped(graph_path, encoding="utf-8", label="mcp graph")) if graph_path.exists() else {"nodes": [], "edges": []}
+    if not graph_path.exists():
+        return {"node_id": node_id, "neighbors": [], "truncated": False}
+    try:
+        graph_path = resolve_audit_artifact(audit_dir, ARTIFACT_PATHS["GRAPH"])
+        graph = json.loads(read_text_auto_capped(graph_path, encoding="utf-8", label="mcp graph")) if graph_path.exists() else {"nodes": [], "edges": []}
+    except PermissionError:
+        raise
+    except (FileSizeLimitError, OSError, json.JSONDecodeError) as exc:
+        raise ValueError("graph artifact invalid") from exc
     nodes = {node.get("id"): node for node in graph.get("nodes", []) if isinstance(node, dict)}
     neighbors: list[dict[str, Any]] = []
     for edge in graph.get("edges", []):
@@ -102,20 +168,34 @@ def graph_neighbors(audit_dir: Path, node_id: str) -> dict[str, Any]:
             neighbors.append({"direction": "out", "edge": edge, "node": nodes[edge["target"]]})
         if edge.get("target") == node_id and edge.get("source") in nodes:
             neighbors.append({"direction": "in", "edge": edge, "node": nodes[edge["source"]]})
-    return {"node_id": node_id, "neighbors": neighbors}
+    return {"node_id": node_id, "neighbors": neighbors[:100], "truncated": len(neighbors) > 100}
+
+
+def bounded_string(value: Any, *, default: str = "") -> str:
+    text = str(value or default)
+    if len(text) > MAX_TOOL_STRING_LENGTH:
+        raise ValueError("argument exceeds maximum length")
+    return text
+
+
+def bounded_limit(value: Any, default: int = 10) -> int:
+    try:
+        return max(1, min(int(value or default), 50))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("limit must be an integer") from exc
 
 
 def call_tool(audit_dir: Path, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if name == "agentic_deep_audit_audit_query":
-        query = str(arguments.get("query") or "")
-        limit = int(arguments.get("limit") or 10)
-        return {"results": query_corpus(audit_dir, query, limit=max(1, min(limit, 50)))}
+        query = bounded_string(arguments.get("query"))
+        limit = bounded_limit(arguments.get("limit"))
+        return {"results": query_corpus(audit_dir, query, limit=limit)}
     if name == "agentic_deep_audit_artifact_read":
-        return read_text_artifact(audit_dir, str(arguments.get("path") or ""))
+        return read_text_artifact(audit_dir, bounded_string(arguments.get("path")))
     if name == "agentic_deep_audit_graph_neighbors":
-        return graph_neighbors(audit_dir, str(arguments.get("node_id") or "repo:target"))
+        return graph_neighbors(audit_dir, bounded_string(arguments.get("node_id"), default="repo:target"))
     if name == "agentic_deep_audit_wiki_page":
-        path = str(arguments.get("path") or ARTIFACT_PATHS["WIKI_HOME"])
+        path = bounded_string(arguments.get("path"), default=ARTIFACT_PATHS["WIKI_HOME"])
         if not path.startswith("wiki/"):
             raise ValueError("wiki page path must start with wiki/")
         return read_text_artifact(audit_dir, path)
@@ -124,6 +204,7 @@ def call_tool(audit_dir: Path, name: str, arguments: dict[str, Any]) -> dict[str
 
 def fence_untrusted_payload(payload: dict[str, Any]) -> dict[str, Any]:
     serialized = clean_transport_text(json.dumps(payload, indent=2, sort_keys=True))
+    serialized, _redaction_count = redact_text(serialized)
     serialized = serialized.replace(UNTRUSTED_BEGIN, "[escaped untrusted-content begin delimiter]")
     serialized = serialized.replace(UNTRUSTED_END, "[escaped untrusted-content end delimiter]")
     risk_markers = [name for name, pattern in JAILBREAK_PATTERNS.items() if pattern.search(serialized)]
@@ -139,6 +220,20 @@ def fence_untrusted_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def json_rpc_result(request_id: Any, result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def error_message(exc: BaseException) -> str:
+    if isinstance(exc, json.JSONDecodeError):
+        return "invalid_json"
+    if isinstance(exc, FileNotFoundError):
+        return "not_found"
+    if isinstance(exc, PermissionError):
+        return "permission_denied"
+    if isinstance(exc, FileSizeLimitError):
+        return "size_limit"
+    if isinstance(exc, ValueError):
+        return "invalid_argument"
+    return "internal_error"
 
 
 def json_rpc_error(request_id: Any, message: str) -> dict[str, Any]:
@@ -161,8 +256,8 @@ def handle_request(audit_dir: Path, request: dict[str, Any]) -> dict[str, Any] |
         if method == "notifications/initialized":
             return None
         return json_rpc_error(request_id, f"unsupported method: {method}")
-    except Exception as exc:  # pragma: no cover - defensive JSON-RPC boundary
-        return json_rpc_error(request_id, str(exc))
+    except Exception as exc:
+        return json_rpc_error(request_id, error_message(exc))
 
 
 def serve_stdio(audit_dir: Path) -> int:
@@ -170,12 +265,20 @@ def serve_stdio(audit_dir: Path) -> int:
         if not line.strip():
             continue
         try:
-            request = json.loads(line)
-            response = handle_request(audit_dir, request if isinstance(request, dict) else {})
+            if len(line) > MAX_JSON_RPC_LINE_LENGTH:
+                response = json_rpc_error(None, "invalid_argument")
+            else:
+                request = json.loads(line)
+                response = handle_request(audit_dir, request if isinstance(request, dict) else {})
         except json.JSONDecodeError as exc:
-            response = json_rpc_error(None, f"invalid JSON: {exc}")
+            response = json_rpc_error(None, error_message(exc))
+        except (RecursionError, MemoryError):
+            response = json_rpc_error(None, "invalid_argument")
         if response is not None:
-            print(json.dumps(response, sort_keys=True), flush=True)
+            try:
+                print(json.dumps(response, sort_keys=True), flush=True)
+            except BrokenPipeError:
+                return 1
     return 0
 
 

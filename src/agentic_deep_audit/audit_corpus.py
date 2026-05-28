@@ -167,6 +167,33 @@ def resolve_repo_file(repo_path: Path, path_value: str) -> Path | None:
     return candidate
 
 
+def _is_link_or_junction(path: Path) -> bool:
+    try:
+        is_junction = getattr(path, "is_junction", lambda: False)
+        return path.is_symlink() or bool(is_junction())
+    except OSError:
+        return True
+
+
+def resolve_audit_file_no_links(audit_dir: Path, path_value: str) -> Path:
+    if not is_safe_repo_relative_path(path_value):
+        raise PermissionError("audit artifact path is not relative")
+    root = audit_dir.resolve()
+    current = root
+    for part in PurePosixPath(path_value).parts:
+        current = current / part
+        if _is_link_or_junction(current):
+            raise PermissionError("audit artifact path contains symlink or junction")
+    candidate = (root / path_value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise PermissionError("audit artifact path escapes audit directory") from exc
+    if not candidate.exists() or not candidate.is_file():
+        raise FileNotFoundError(path_value)
+    return candidate
+
+
 def text_file_body(repo_path: Path, path_value: str, binary: bool, max_bytes: int = MAX_TEXT_FILE_BODY_BYTES) -> str:
     if binary:
         return ""
@@ -562,8 +589,9 @@ def query_corpus(audit_dir: Path, query: str, limit: int = 10, rrf: dict[str, An
     config = rrf or DEFAULT_RRF
     k = int(config.get("k") or DEFAULT_RRF["k"])
     weights = {key: float((config.get("weights") or {}).get(key, DEFAULT_RRF["weights"][key])) for key in DEFAULT_RRF["weights"]}
-    sqlite_path = audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE"]
-    with closing(sqlite3.connect(sqlite_path)) as connection:
+    sqlite_path = resolve_audit_file_no_links(audit_dir, ARTIFACT_PATHS["CORPUS_SQLITE"])
+    uri = sqlite_path.resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
         source_rows = ranked_source_rows(connection, query, limit * 4)
         combined: dict[str, dict[str, Any]] = {}
         for source, rows in source_rows.items():

@@ -135,6 +135,7 @@ SCHEMA_FILES: dict[str, str] = {
     "corpus_index": "corpus_index.schema.json",
     "adapter_decision": "adapter_decision.schema.json",
     "core_envelope": "core_envelope.schema.json",
+    "mcp_config": "mcp_config.schema.json",
 }
 
 

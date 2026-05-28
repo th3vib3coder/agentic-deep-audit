@@ -117,6 +117,11 @@ def add_package_node(state: GraphState, name: str) -> None:
 
 
 def add_edge(state: GraphState, source: str, target: str, edge_type: str, weight: float, conditional: bool, dynamic: bool, evidence_ids: list[str]) -> None:
+    if source == target:
+        # B04: a node referencing itself corrupts weighted-in-degree and gives PageRank
+        # perpetual positive feedback. Record the occurrence but do not create an edge.
+        state.coverage_notes.append(f"{source}: self-referential {edge_type} edge skipped")
+        return
     key = (source, target, edge_type, conditional, dynamic)
     existing = state.edges.get(key)
     if existing is None:
@@ -130,6 +135,9 @@ def add_edge(state: GraphState, source: str, target: str, edge_type: str, weight
             "evidence_ids": sorted(set(evidence_ids)),
         }
         return
+    # B03: distinct import sites that share (source, target, type, conditional, dynamic) must
+    # sum their weights so centrality reflects import frequency instead of a single deduped edge.
+    existing["weight"] = float(existing.get("weight") or 0.0) + float(weight)
     existing["evidence_ids"] = sorted(set(existing.get("evidence_ids", [])) | set(evidence_ids))
 
 
@@ -303,15 +311,27 @@ def parse_js_ts(state: GraphState, path: str) -> None:
         return
     text = data.decode("utf-8", errors="replace")
     evidence_ids = state.evidence_by_path.get(path, [])
+    # B05: line-based conditional tracking is heuristic. We recognize the common conditional
+    # openers (if / else if / while / for) instead of only `if (`, and we never let the depth
+    # go negative when closing braces outnumber tracked openers (function bodies also use `{}`).
+    # When a file contains conditional imports we flag the heuristic so downstream consumers do
+    # not treat the conditional/non-conditional split as exact.
     conditional_depth = 0
+    conditional_import_seen = False
     for line_number, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
-        if re.match(r"if\s*\(", stripped):
+        leading_closers = len(re.match(r"^}*", stripped).group(0))
+        if leading_closers and conditional_depth:
+            conditional_depth = max(0, conditional_depth - leading_closers)
+        remainder = stripped[leading_closers:].lstrip()
+        if re.match(r"(?:else\s+)?if\s*\(", remainder) or re.match(r"else\s*\{", remainder) or re.match(r"(?:while|for)\s*\(", remainder):
             conditional_depth += 1
         for pattern in [r"\bimport(?:[^'\"]*\bfrom\s*)?['\"]([^'\"]+)['\"]", r"\bexport\s+.*\bfrom\s+['\"]([^'\"]+)['\"]", r"\brequire\(\s*['\"]([^'\"]+)['\"]\s*\)"]:
             for match in re.finditer(pattern, line):
                 target = resolve_js_target(state, path, match.group(1))
-                add_edge(state, node_id(path), target, "imports", 0.5 if conditional_depth else 1.0, bool(conditional_depth), False, evidence_ids)
+                conditional = bool(conditional_depth)
+                conditional_import_seen = conditional_import_seen or conditional
+                add_edge(state, node_id(path), target, "imports", 0.5 if conditional else 1.0, conditional, False, evidence_ids)
         if "require(" in line and not re.search(r"require\(\s*['\"]", line):
             state.coverage_notes.append(f"{path}:{line_number}: dynamic require skipped")
         for pattern in [r"\bexport\s+function\s+([A-Za-z_$][\w$]*)", r"\bexport\s+(?:const|let|var|class)\s+([A-Za-z_$][\w$]*)", r"module\.exports"]:
@@ -319,8 +339,11 @@ def parse_js_ts(state: GraphState, path: str) -> None:
             if match:
                 name = match.group(1) if match.groups() else "module.exports"
                 add_symbol(state, path, name, "export", line_span(data, line_number, line_number), True, evidence_ids, True)
-        if "}" in stripped and conditional_depth:
-            conditional_depth -= stripped.count("}")
+        trailing_closers = remainder.count("}")
+        if trailing_closers and conditional_depth:
+            conditional_depth = max(0, conditional_depth - trailing_closers)
+    if conditional_import_seen:
+        state.coverage_notes.append(f"{path}: javascript conditional-import detection is heuristic")
 
 
 def parse_go(state: GraphState, path: str) -> None:
@@ -417,10 +440,14 @@ def compute_centrality(nodes: list[dict[str, Any]], edges: list[dict[str, Any]],
     scores = {identifier: 0.0 for identifier in ids}
     if algorithm == "weighted_in_degree":
         for edge in edges:
+            if edge["source"] == edge["target"]:  # B04 defense-in-depth
+                continue
             if edge["target"] in scores:
                 scores[edge["target"]] += float(edge.get("weight") or 0.0)
     elif algorithm == "degree_total":
         for edge in edges:
+            if edge["source"] == edge["target"]:  # B04 defense-in-depth
+                continue
             if edge["target"] in scores:
                 scores[edge["target"]] += float(edge.get("weight") or 0.0)
             if edge["source"] in scores:
@@ -435,23 +462,36 @@ def compute_centrality(nodes: list[dict[str, Any]], edges: list[dict[str, Any]],
 def pagerank(ids: list[str], edges: list[dict[str, Any]]) -> dict[str, float]:
     if not ids:
         return {}
+    # B10: membership tests use a set (O(1)) instead of scanning the id list (O(V)); dangling
+    # mass is redistributed once per iteration instead of per-source (was O(D*V) -> O(V)).
+    ids_set = set(ids)
+    count = len(ids)
     outgoing: dict[str, list[tuple[str, float]]] = defaultdict(list)
     for edge in edges:
-        if edge["source"] in ids and edge["target"] in ids:
-            outgoing[edge["source"]].append((edge["target"], float(edge.get("weight") or 1.0)))
-    scores = {identifier: 1.0 / len(ids) for identifier in ids}
+        source = edge["source"]
+        target = edge["target"]
+        if source == target:  # B04: self-loops give PageRank perpetual positive feedback
+            continue
+        if source in ids_set and target in ids_set:
+            outgoing[source].append((target, float(edge.get("weight") or 1.0)))
+    scores = {identifier: 1.0 / count for identifier in ids}
     damping = 0.85
+    base = (1.0 - damping) / count
     for _ in range(20):
-        next_scores = {identifier: (1.0 - damping) / len(ids) for identifier in ids}
+        next_scores = {identifier: base for identifier in ids}
+        dangling_mass = 0.0
         for source in ids:
-            total = sum(weight for _, weight in outgoing.get(source, []))
-            if total == 0:
-                share = scores[source] / len(ids)
-                for target in ids:
-                    next_scores[target] += damping * share
+            out = outgoing.get(source)
+            total = sum(weight for _, weight in out) if out else 0.0
+            if total == 0.0:
+                dangling_mass += scores[source]
                 continue
-            for target, weight in outgoing[source]:
+            for target, weight in out:
                 next_scores[target] += damping * scores[source] * (weight / total)
+        if dangling_mass:
+            share = damping * dangling_mass / count
+            for identifier in ids:
+                next_scores[identifier] += share
         scores = next_scores
     return scores
 
