@@ -12,7 +12,7 @@ from agentic_deep_audit.audit_graph import run_graph
 from agentic_deep_audit.audit_inventory import run_inventory
 from agentic_deep_audit.audit_manifest import run_manifest
 from agentic_deep_audit.audit_surface import run_surface
-from agentic_deep_audit.audit_synthesis import decision_doc_questions, markdown_cell, run_synthesis
+from agentic_deep_audit.audit_synthesis import decision_doc_questions, enrich_architecture, markdown_cell, run_synthesis
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.bootstrap import bootstrap_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
@@ -93,6 +93,38 @@ def test_synthesis_preserves_baseline_and_generates_evidence_backed_outputs(tmp_
     for key in ["coupling", "dependencies", "license_status_source", "performance_note", "limitations", "evidence_ids"]:
         assert first[key] or key == "dependencies"
     assert validate_audit(audit_dir).ok
+
+
+def test_synthesis_flags_evidence_linkage_gap_instead_of_silent_skip(tmp_path: Path) -> None:
+    # C6-04: structural artifacts present but with no reachable evidence id must be surfaced as an
+    # evidence-linkage gap, not a bare "skipped" that contradicts the visible module count.
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    path = audit_dir / ARTIFACT_PATHS["ARCHITECTURE"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Architecture\n\n## Baseline\n\n- baseline.\n", encoding="utf-8")
+    module_graph = {"nodes": [{"id": "module:a", "type": "module"}, {"id": "module:b", "type": "module"}], "edges": []}
+
+    enrich_architecture(audit_dir, module_graph, {"symbols": []}, {})
+
+    text = path.read_text(encoding="utf-8")
+    assert "evidence-linkage gap" in text
+    assert "2 modules" in text
+
+
+def test_synthesis_preserves_original_when_no_baseline_section(tmp_path: Path) -> None:
+    # C6-05: a document with no "## Baseline" section must not have its original content discarded.
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    path = audit_dir / ARTIFACT_PATHS["ARCHITECTURE"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Architecture\n\n## Custom Section\n\n- important hand content\n", encoding="utf-8")
+    module_graph = {"nodes": [{"id": "module:a", "type": "module"}], "edges": []}
+
+    enrich_architecture(audit_dir, module_graph, {"symbols": []}, {})
+
+    text = path.read_text(encoding="utf-8")
+    assert "important hand content" in text
 
 
 def test_feature_without_evidence_moves_to_open_questions(tmp_path: Path) -> None:

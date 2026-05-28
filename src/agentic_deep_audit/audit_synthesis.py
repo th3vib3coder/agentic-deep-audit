@@ -158,13 +158,33 @@ def enrich_architecture(audit_dir: Path, module_graph: dict[str, Any], symbol_in
             "",
         ]
     else:
+        # C6-04: distinguish "genuinely empty repository" from "structural artifacts exist but none
+        # carry a reachable evidence id". The latter is an evidence-linkage gap (a finding), not a
+        # silent skip that contradicts the visible module/symbol/surface counts.
+        surface_total = api_count + cli_count + config_count + mcp_count
+        if module_count or symbol_count or surface_total:
+            detail = (
+                f"- skipped: {module_count} modules, {symbol_count} symbols and {surface_total} surface "
+                "records are present, but none carry a reachable evidence id, so no evidence-backed "
+                "synthesis can be made. This evidence-linkage gap is a finding, not an empty repository."
+            )
+        else:
+            detail = "- skipped: no graph, symbol or surface artifacts are present for architecture synthesis."
         synthesis = [
             "## Evidence-Backed Synthesis",
             "",
-            "- skipped: no reachable graph, symbol or surface evidence for architecture synthesis.",
+            detail,
             "",
         ]
-    prefix = original[: baseline_bounds[0]] if baseline_bounds is not None else "# Architecture\n\n"
+    if baseline_bounds is not None:
+        prefix = original[: baseline_bounds[0]]
+    else:
+        # C6-05: when the document has no "## Baseline" section we previously discarded the entire
+        # original and replaced it with a bare header, silently losing any pre-existing content.
+        # Preserve the original instead and append the fallback baseline + synthesis below it.
+        prefix = original if original.strip() else "# Architecture\n\n"
+        if not prefix.endswith("\n"):
+            prefix += "\n"
     separator = "\n" if baseline.endswith("\n") else "\n\n"
     atomic_write_text(path, prefix + baseline + separator + "\n".join(synthesis))
 

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .audit_reuse import DECISIONS, is_strong_copyleft_license, target_context_from
+from .audit_reuse import DECISIONS, RECOMMENDATIONS, is_strong_copyleft_license, target_context_from
 from .config import ConfigError
 from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
@@ -74,10 +74,12 @@ def validate_card(index: int, card: Any, available: set[str], errors: list[str])
             errors.append(f"REUSE_CARDS.json card {index} missing {key}")
     if card.get("decision") not in DECISIONS:
         errors.append(f"REUSE_CARDS.json card {index} invalid decision: {card.get('decision')}")
-    if card.get("recommendation") != card.get("decision"):
-        errors.append(f"REUSE_CARDS.json card {index} recommendation must equal decision")
-    if card.get("requires_human_decision") is True and card.get("decision") == "adopt":
-        errors.append(f"REUSE_CARDS.json card {index} cannot adopt while requires_human_decision is true")
+    if card.get("recommendation") not in RECOMMENDATIONS:
+        errors.append(f"REUSE_CARDS.json card {index} invalid recommendation: {card.get('recommendation')}")
+    if card.get("decision") != "pending":
+        errors.append(f"REUSE_CARDS.json card {index} decision must be 'pending'; the tool recommends, humans decide")
+    if card.get("requires_human_decision") is True and card.get("recommendation") == "adopt":
+        errors.append(f"REUSE_CARDS.json card {index} cannot recommend adopt while requires_human_decision is true")
     validate_target_context(f"REUSE_CARDS.json card {index}", card.get("target_context"), errors)
     validate_evidence_ids(f"REUSE_CARDS.json cards[{index}].evidence_ids", card.get("evidence_ids"), available, errors)
     score_inputs = card.get("score_inputs")
@@ -91,8 +93,8 @@ def validate_card(index: int, card: Any, available: set[str], errors: list[str])
     if any(str(reason).startswith(("license_unknown", "strong_copyleft_conflict", "high_risk", "missing_evidence", "binary_only_dependency")) for reason in reasons):
         if card.get("requires_human_decision") is not True:
             errors.append(f"REUSE_CARDS.json card {index} blocker reason requires human decision")
-        if card.get("decision") == "adopt":
-            errors.append(f"REUSE_CARDS.json card {index} blocker reason cannot produce adopt")
+        if card.get("recommendation") == "adopt":
+            errors.append(f"REUSE_CARDS.json card {index} blocker reason cannot produce adopt recommendation")
     structural_blockers: list[str] = []
     license_status = str(card.get("license_status") or score_inputs.get("license_status") or "")
     if license_status in {"unknown", "conflict"}:
@@ -110,8 +112,8 @@ def validate_card(index: int, card: Any, available: set[str], errors: list[str])
     if structural_blockers:
         if card.get("requires_human_decision") is not True:
             errors.append(f"REUSE_CARDS.json card {index} structural blocker requires human decision: {structural_blockers}")
-        if card.get("decision") == "adopt":
-            errors.append(f"REUSE_CARDS.json card {index} structural blocker cannot produce adopt: {structural_blockers}")
+        if card.get("recommendation") == "adopt":
+            errors.append(f"REUSE_CARDS.json card {index} structural blocker cannot produce adopt recommendation: {structural_blockers}")
     for caveat_key in ["legal_caveat", "security_caveat", "performance_caveat"]:
         if not isinstance(card.get(caveat_key), str) or not card.get(caveat_key):
             errors.append(f"REUSE_CARDS.json card {index} missing non-empty {caveat_key}")

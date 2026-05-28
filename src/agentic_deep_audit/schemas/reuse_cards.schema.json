@@ -97,10 +97,7 @@
           },
           "decision": {
             "enum": [
-              "adopt",
-              "adapt",
-              "study",
-              "avoid"
+              "pending"
             ]
           },
           "requires_human_decision": {

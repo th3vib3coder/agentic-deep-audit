@@ -217,7 +217,7 @@ def test_reuse_schema_requires_plan_decision_enum_and_human_gate() -> None:
         "license_status": "unknown",
         "target_context": {"allowed_languages": ["*"]},
         "recommendation": "study",
-        "decision": "study",
+        "decision": "pending",
         "requires_human_decision": True,
         "legal_caveat": "review",
         "security_caveat": "review",
@@ -228,6 +228,7 @@ def test_reuse_schema_requires_plan_decision_enum_and_human_gate() -> None:
     valid = {"schema_version": "1.0", "target_context": {"allowed_languages": ["*"]}, "scoring_input_sources": {"target_context": "RUN_CONFIG.json"}, "cards": [valid_card]}
     validate_sample(schema("reuse_cards.schema.json"), valid)
     assert_invalid(schema("reuse_cards.schema.json"), {"schema_version": "1.0", "target_context": {"allowed_languages": ["*"]}, "scoring_input_sources": {"target_context": "RUN_CONFIG.json"}, "cards": [{**valid_card, "recommendation": "needs_review"}]})
+    assert_invalid(schema("reuse_cards.schema.json"), {"schema_version": "1.0", "target_context": {"allowed_languages": ["*"]}, "scoring_input_sources": {"target_context": "RUN_CONFIG.json"}, "cards": [{**valid_card, "decision": "study"}]})
     invalid_missing_gate = {**valid_card}
     invalid_missing_gate.pop("requires_human_decision")
     assert_invalid(schema("reuse_cards.schema.json"), {"schema_version": "1.0", "target_context": {"allowed_languages": ["*"]}, "scoring_input_sources": {"target_context": "RUN_CONFIG.json"}, "cards": [invalid_missing_gate]})
@@ -239,7 +240,7 @@ def test_reuse_schema_requires_plan_decision_enum_and_human_gate() -> None:
         ("suspicious_behaviors.schema.json", {"schema_version": "1.0", "behaviors": [{"behavior_id": "susp-1", "kind": "eval", "evidence_ids": ["ev-000001"], "severity": "high", "confidence": "medium", "source": "heuristic"}]}),
         ("agentic_security_finding.schema.json", {"schema_version": "1.0", "findings": [{"finding_id": "agentic-1", "code": "W015", "target": "AGENTS.md", "severity": "medium", "confidence": "high", "evidence_ids": ["ev-000001"], "recommendation": "sanitize"}]}),
         ("license_cards.schema.json", {"schema_version": "1.0", "cards": [{"card_id": "lic-1", "kind": "file", "declared_license": "MIT", "confidence": "medium", "detection_method": "spdx_header", "requires_human_decision": False, "evidence_ids": ["ev-000001"]}]}),
-        ("reuse_cards.schema.json", {"schema_version": "1.0", "target_context": {"allowed_languages": ["python"]}, "scoring_input_sources": {"special_implementations": "SPECIAL_IMPLEMENTATIONS.json"}, "cards": [{"reuse_id": "reuse-1", "candidate_id": "candidate-1", "name": "Indexer", "problem_solved": "search", "files": ["a.py"], "license_status": "needs_review", "target_context": {"allowed_languages": ["python"]}, "recommendation": "study", "decision": "study", "requires_human_decision": True, "legal_caveat": "review", "security_caveat": "review", "performance_caveat": "static", "score_inputs": {}, "evidence_ids": ["ev-000001"]}]}),
+        ("reuse_cards.schema.json", {"schema_version": "1.0", "target_context": {"allowed_languages": ["python"]}, "scoring_input_sources": {"special_implementations": "SPECIAL_IMPLEMENTATIONS.json"}, "cards": [{"reuse_id": "reuse-1", "candidate_id": "candidate-1", "name": "Indexer", "problem_solved": "search", "files": ["a.py"], "license_status": "needs_review", "target_context": {"allowed_languages": ["python"]}, "recommendation": "study", "decision": "pending", "requires_human_decision": True, "legal_caveat": "review", "security_caveat": "review", "performance_caveat": "static", "score_inputs": {}, "evidence_ids": ["ev-000001"]}]}),
         ("scientific_provenance.schema.json", {"schema_version": "1.0", "records": [{"record_id": "sci-1", "category": "tool_version", "observed_value": {"tool": "nextflow"}, "evidence_ids": ["ev-000001"], "confidence": "high", "detection_method": "manifest_or_lockfile", "requires_human_decision": False}]}),
         ("project_telemetry.schema.json", {"schema_version": "1.0", "records": [{"telemetry_id": "tel-1", "category": "release_cadence", "status": "skipped", "parameters": {"time_window_days": 365, "from_ref": None, "to_ref": None, "bot_filter": "n/a", "identity_normalization": "n/a"}, "value": None, "evidence_ids": [], "source": "git_tags", "confidence": "low", "limitations": ["no git"]}]}),
         ("audit_runtime_metrics.schema.json", {"schema_version": "1.0", "run_id": "run-1", "phase_durations_ms": {}, "files_processed": 0, "bytes_processed": 0, "output_bytes": 0, "tool_failures": 0}),

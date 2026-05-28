@@ -15,7 +15,10 @@ from .models import ARTIFACT_PATHS
 from .sanitize import markdown_table_cell
 
 
-DECISIONS = {"adopt", "adapt", "study", "avoid"}
+# C6-06: the tool only RECOMMENDS; the human DECIDES. `recommendation` is the tool's call;
+# `decision` is human-gated and stays "pending" in tool output.
+RECOMMENDATIONS = {"adopt", "adapt", "study", "avoid"}
+DECISIONS = {"pending"}
 PERMISSIVE_LICENSES = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"}
 STRONG_COPYLEFT_LICENSES = {"AGPL-3.0", "AGPL-1.0", "GPL-3.0", "GPL-2.0", "SSPL-1.0"}
 BINARY_DEPENDENCY_KINDS = {"native_binary", "model_checkpoint", "archive", "wasm", "unknown_binary"}
@@ -188,7 +191,7 @@ def build_cards(run_config: dict[str, Any], audit_dir: Path) -> dict[str, Any]:
             human_reasons.append("target_language_mismatch")
         if target_context.get("production_required") and tests_observed == 0:
             human_reasons.append("production_context_without_test_signal")
-        decision = recommendation_for(human_reasons, effort, tests_observed, target_context)
+        recommendation = recommendation_for(human_reasons, effort, tests_observed, target_context)
         score_inputs = {
             "license_status": license_info["status"],
             "license_spdx": license_info["spdx"],
@@ -216,8 +219,8 @@ def build_cards(run_config: dict[str, Any], audit_dir: Path) -> dict[str, Any]:
                 "target_context": target_context,
                 "coupling": str(candidate.get("coupling") or "unknown") if str(candidate.get("coupling") or "unknown") in {"low", "medium", "high", "unknown"} else "unknown",
                 "porting_effort": effort,
-                "recommendation": decision,
-                "decision": decision,
+                "recommendation": recommendation,
+                "decision": "pending",
                 "requires_human_decision": bool(human_reasons),
                 "legal_caveat": f"Legal review required before reuse; current status: {license_info['reason']}.",
                 "security_caveat": "Security review required before reuse; high-risk findings force human decision." if risk_reasons else "Security review still required before reuse; no high-risk reuse blocker was observed in generated risk artifacts.",
@@ -277,16 +280,18 @@ def reuse_map(payload: dict[str, Any]) -> str:
         "",
     ]
     cards = [card for card in payload.get("cards", []) if isinstance(card, dict)]
-    for decision in ["adopt", "adapt", "study", "avoid"]:
-        lines.extend([f"## {decision.title()}", "", "| Candidate | Files | Human Decision | Caveat | Evidence |", "|---|---|---|---|---|"])
-        decision_cards = [card for card in cards if card.get("decision") == decision]
-        if not decision_cards:
-            lines.append("|  |  |  |  |  |")
-        for card in decision_cards:
+    # C6-06: the sections below are the tool's RECOMMENDATION; every card's `decision` stays
+    # human-gated ("pending"). The "Human Review" column flags cards that force explicit sign-off.
+    for recommendation in ["adopt", "adapt", "study", "avoid"]:
+        lines.extend([f"## Recommended: {recommendation.title()}", "", "| Candidate | Files | Decision | Human Review | Caveat | Evidence |", "|---|---|---|---|---|---|"])
+        bucket = [card for card in cards if card.get("recommendation") == recommendation]
+        if not bucket:
+            lines.append("|  |  |  |  |  |  |")
+        for card in bucket:
             files = ", ".join(f"`{path}`" for path in card.get("files", []))
             evidence = ", ".join(f"`{item}`" for item in card.get("evidence_ids", []))
             caveat = markdown_cell(card.get("legal_caveat"))
-            lines.append(f"| {markdown_cell(card.get('name'))} | {files} | {card.get('requires_human_decision')} | {caveat} | {evidence} |")
+            lines.append(f"| {markdown_cell(card.get('name'))} | {files} | {markdown_cell(card.get('decision'))} | {card.get('requires_human_decision')} | {caveat} | {evidence} |")
         lines.append("")
     if payload.get("skipped"):
         lines.extend(["## Skipped", "", f"- {payload.get('skip_reason') or 'No reusable candidates.'}", ""])

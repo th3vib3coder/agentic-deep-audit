@@ -155,3 +155,31 @@ def test_run_dry_run_lists_reuse_artifacts(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     planned = set(json.loads(result.stdout)["planned_artifacts"])
     assert {ARTIFACT_PATHS["REUSE_CARDS"], ARTIFACT_PATHS["REUSE_MAP"]} <= planned
+
+
+def test_reuse_decision_is_pending_and_recommendation_is_separate(tmp_path: Path) -> None:
+    # C6-06: the tool only RECOMMENDS; the human DECIDES. Every tool-emitted card carries a
+    # separate `recommendation` (adopt/adapt/study/avoid) and a human-gated `decision` == "pending".
+    audit_dir = run_reuse_fixture(tmp_path)
+    cards = load_json(audit_dir / ARTIFACT_PATHS["REUSE_CARDS"])
+
+    assert cards["cards"]
+    for card in cards["cards"]:
+        assert card["decision"] == "pending"
+        assert card["recommendation"] in {"adopt", "adapt", "study", "avoid"}
+    assert validate_audit(audit_dir).ok
+
+
+def test_validator_rejects_non_pending_reuse_decision(tmp_path: Path) -> None:
+    # C6-06: the validator must reject a tool card whose decision is anything but "pending"
+    # (e.g. the old behaviour where decision was set equal to the recommendation).
+    audit_dir = run_reuse_fixture(tmp_path)
+    cards_path = audit_dir / ARTIFACT_PATHS["REUSE_CARDS"]
+    payload = load_json(cards_path)
+    payload["cards"][0]["decision"] = payload["cards"][0]["recommendation"]
+    cards_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    validation = validate_audit(audit_dir)
+
+    assert not validation.ok
+    assert any("decision must be 'pending'" in error for error in validation.errors)
