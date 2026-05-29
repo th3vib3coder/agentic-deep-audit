@@ -167,6 +167,44 @@ def test_manifest_commands_are_denied_by_target_repo_origin(tmp_path: Path) -> N
     assert decision.policy_rule == "target_repo_manifest_no_exec"
 
 
+def test_manifest_map_fields_are_canonicalized_independent_of_source_key_order(tmp_path: Path) -> None:
+    package_a = tmp_path / "a" / "package.json"
+    package_b = tmp_path / "b" / "package.json"
+    package_a.parent.mkdir()
+    package_b.parent.mkdir()
+    package_a.write_text(
+        json.dumps(
+            {
+                "dependencies": {"zeta": "1", "alpha": "2"},
+                "scripts": {"zeta": "npm run z", "alpha": "npm run a"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    package_b.write_text(
+        json.dumps(
+            {
+                "scripts": {"alpha": "npm run a", "zeta": "npm run z"},
+                "dependencies": {"alpha": "2", "zeta": "1"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cargo_a = tmp_path / "Cargo-a.toml"
+    cargo_b = tmp_path / "Cargo-b.toml"
+    cargo_a.write_text("[package]\nname='x'\n[dependencies]\nzeta='1'\nalpha='2'\n", encoding="utf-8")
+    cargo_b.write_text("[package]\nname='x'\n[dependencies]\nalpha='2'\nzeta='1'\n", encoding="utf-8")
+
+    parsed_a = audit_manifest.parse_package_json(package_a)
+    parsed_b = audit_manifest.parse_package_json(package_b)
+    cargo_parsed_a = audit_manifest.parse_cargo(cargo_a)
+    cargo_parsed_b = audit_manifest.parse_cargo(cargo_b)
+
+    assert parsed_a["dependencies"] == parsed_b["dependencies"]
+    assert [script["source"] for script in parsed_a["scripts"]] == [script["source"] for script in parsed_b["scripts"]]
+    assert cargo_parsed_a["dependencies"] == cargo_parsed_b["dependencies"]
+
+
 def test_manifest_and_hook_command_tokenization_share_invalid_quote_semantics() -> None:
     command = "git log --oneline '"
 

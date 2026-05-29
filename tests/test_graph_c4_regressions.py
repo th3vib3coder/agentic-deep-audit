@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -182,6 +183,74 @@ def test_b15_nonzero_dropped_edge_count_fails_validation(tmp_path: Path) -> None
 def test_b11_recompose_mismatch_sample_reports_order_only_mismatch() -> None:
     sample = recompose_mismatch_sample([{"id": "a"}, {"id": "b"}], [{"id": "b"}, {"id": "a"}])
     assert "different order" in sample
+
+
+def test_td7_graph_read_source_bytes_degrades_on_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = ag.GraphState(repo_path=Path("."), records=[], evidence_by_path={})
+
+    def raise_oserror(*_args: Any, **_kwargs: Any) -> bytes:
+        raise OSError("[WinError 206] path too long")
+
+    monkeypatch.setattr(ag, "read_bytes_capped", raise_oserror)
+
+    assert ag.read_source_bytes(state, "src/too_long.py") is None
+    assert state.coverage_notes == ["src/too_long.py: graph parse skipped: [WinError 206] path too long"]
+
+
+def test_td7_graph_edges_sort_by_full_identity() -> None:
+    ordered = sorted(
+        [
+            {"source": "module:a", "target": "module:b", "type": "imports", "conditional": True, "dynamic": False},
+            {"source": "module:a", "target": "module:b", "type": "imports", "conditional": False, "dynamic": False},
+            {"source": "module:a", "target": "module:b", "type": "imports", "conditional": False, "dynamic": True},
+        ],
+        key=ag.graph_edge_sort_key,
+    )
+    assert [(edge["conditional"], edge["dynamic"]) for edge in ordered] == [(False, False), (False, True), (True, False)]
+
+
+def test_td7_call_edges_sort_by_full_identity() -> None:
+    ordered = sorted(
+        [
+            {"caller": "symbol:a", "callee": "symbol:b", "conditional": True, "dynamic": False},
+            {"caller": "symbol:a", "callee": "symbol:b", "conditional": False, "dynamic": False},
+            {"caller": "symbol:a", "callee": "symbol:b", "conditional": False, "dynamic": True},
+        ],
+        key=ag.call_edge_sort_key,
+    )
+    assert [(edge["conditional"], edge["dynamic"]) for edge in ordered] == [(False, False), (False, True), (True, False)]
+
+
+def test_td7_run_graph_outputs_edges_in_full_identity_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    audit_dir = tmp_path / "audit"
+    repo = tmp_path / "repo"
+    audit_dir.mkdir()
+    repo.mkdir()
+    _write(
+        audit_dir / ARTIFACT_PATHS["FILE_INDEX"],
+        {"schema_version": "1.0", "repo": {"path": str(repo)}, "records": [], "skipped_paths": [], "root_documents": []},
+    )
+    _write(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"], {"schema_version": "1.0", "evidence": []})
+
+    def fake_extract_graph(state: ag.GraphState) -> None:
+        state.nodes["module:a"] = {"id": "module:a", "type": "module", "path": "a.py", "evidence_ids": []}
+        state.nodes["module:b"] = {"id": "module:b", "type": "module", "path": "b.py", "evidence_ids": []}
+        ag.add_edge(state, "module:a", "module:b", "imports", 0.5, True, False, [])
+        ag.add_edge(state, "module:a", "module:b", "imports", 0.25, False, True, [])
+        ag.add_edge(state, "module:a", "module:b", "imports", 1.0, False, False, [])
+        ag.add_call(state, "symbol:a", "symbol:b", "a.py", True, False, [])
+        ag.add_call(state, "symbol:a", "symbol:b", "a.py", False, True, [])
+        ag.add_call(state, "symbol:a", "symbol:b", "a.py", False, False, [])
+
+    monkeypatch.setattr(ag, "extract_graph", fake_extract_graph)
+    monkeypatch.setattr(ag, "run_canonical_graph_outputs", lambda *_args, **_kwargs: None)
+
+    ag.run_graph({"repo": {"path": str(repo)}, "run_id": "run-graph"}, audit_dir)
+
+    module_graph = json.loads((audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]).read_text(encoding="utf-8"))
+    call_graph = json.loads((audit_dir / ARTIFACT_PATHS["CALL_GRAPH"]).read_text(encoding="utf-8"))
+    assert [(edge["conditional"], edge["dynamic"]) for edge in module_graph["edges"]] == [(False, False), (False, True), (True, False)]
+    assert [(edge["conditional"], edge["dynamic"]) for edge in call_graph["edges"]] == [(False, False), (False, True), (True, False)]
 
 
 def test_tesla01_validator_accepts_windows_symbol_path_edge(tmp_path: Path) -> None:

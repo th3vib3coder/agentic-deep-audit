@@ -90,6 +90,17 @@ def test_cli_surface_records_entrypoints_without_execution(tmp_path: Path) -> No
     assert all(item["executable"] is False and item["observed_not_executed"] is True for item in cli)
 
 
+def test_package_bin_records_are_canonicalized_by_name(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"bin": {"zeta": "z.js", "alpha": "a.js"}}\n', encoding="utf-8")
+
+    records = audit_surface.package_bin_records(repo, {"package.json": ["ev-000001"]}, 0)
+
+    assert [record["name"] for record in records] == ["alpha", "zeta"]
+    assert [record["surface_id"] for record in records] == ["cli-000001", "cli-000002"]
+
+
 def test_cli_surface_skips_oversized_manifest_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

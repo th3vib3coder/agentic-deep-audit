@@ -228,7 +228,7 @@ def package_bin_records(repo_path: Path, evidence_lookup: dict[str, list[str]], 
     bins = payload.get("bin")
     items = bins.items() if isinstance(bins, dict) else ([(payload.get("name") or "node-bin", bins)] if isinstance(bins, str) else [])
     records: list[dict[str, Any]] = []
-    for name, target in items:
+    for name, target in sorted(items):
         records.append(surface_record("cli", offset + len(records) + 1, "node_bin", "package.json", evidence_lookup.get("package.json", []), repo_path, status="observed", confidence="high", name=str(name), entrypoint=str(target), executable=False, observed_not_executed=True))
     return records
 

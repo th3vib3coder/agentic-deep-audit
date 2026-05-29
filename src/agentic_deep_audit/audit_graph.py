@@ -101,7 +101,7 @@ def line_span(data: bytes, start_line: int, end_line: int) -> dict[str, int]:
 def read_source_bytes(state: GraphState, path: str) -> bytes | None:
     try:
         return read_bytes_capped(state.repo_path / path, label="graph source")
-    except FileSizeLimitError as exc:
+    except (OSError, FileSizeLimitError) as exc:
         state.coverage_notes.append(f"{path}: graph parse skipped: {exc}")
         return None
 
@@ -569,6 +569,14 @@ def append_centrality_status(audit_dir: Path, algorithm: str) -> None:
     )
 
 
+def graph_edge_sort_key(edge: dict[str, Any]) -> tuple[str, str, str, bool, bool]:
+    return (str(edge["source"]), str(edge["target"]), str(edge["type"]), bool(edge.get("conditional")), bool(edge.get("dynamic")))
+
+
+def call_edge_sort_key(edge: dict[str, Any]) -> tuple[str, str, bool, bool]:
+    return (str(edge["caller"]), str(edge["callee"]), bool(edge.get("conditional")), bool(edge.get("dynamic")))
+
+
 def run_graph(run_config: dict[str, Any], audit_dir: Path) -> None:
     file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"])
     evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"])
@@ -578,7 +586,7 @@ def run_graph(run_config: dict[str, Any], audit_dir: Path) -> None:
     extract_graph(state)
 
     nodes = sorted(state.nodes.values(), key=lambda item: item["id"])
-    edges = sorted(state.edges.values(), key=lambda item: (item["source"], item["target"], item["type"]))
+    edges = sorted(state.edges.values(), key=graph_edge_sort_key)
     graph_config = run_config.get("graph") if isinstance(run_config.get("graph"), dict) else {}
     centrality_config = graph_config.get("centrality") if isinstance(graph_config.get("centrality"), dict) else {}
     algorithm = str(centrality_config.get("algorithm") or DEFAULT_CENTRALITY)
@@ -602,7 +610,7 @@ def run_graph(run_config: dict[str, Any], audit_dir: Path) -> None:
             {
                 "schema_version": "1.0",
                 "nodes": sorted(state.call_nodes.values(), key=lambda item: item["id"]),
-                "edges": sorted(state.call_edges.values(), key=lambda item: (item["caller"], item["callee"])),
+                "edges": sorted(state.call_edges.values(), key=call_edge_sort_key),
                 "coverage": coverage,
                 "partial_reason": "; ".join(coverage["notes"]) if coverage["notes"] else None,
             },

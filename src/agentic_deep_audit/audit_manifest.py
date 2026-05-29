@@ -114,12 +114,12 @@ def parse_pyproject(path: Path) -> dict[str, Any]:
     dependencies: list[dict[str, Any]] = []
     for item in project.get("dependencies") or []:
         dependencies.append(dependency(str(item), scope="project.dependencies"))
-    for group, values in (project.get("optional-dependencies") or {}).items():
+    for group, values in sorted((project.get("optional-dependencies") or {}).items()):
         for item in values or []:
             dependencies.append(dependency(str(item), scope=f"optional.{group}"))
     for item in build_system.get("requires") or []:
         dependencies.append(dependency(str(item), scope="build-system.requires"))
-    commands = [observed_command(command, path.name, category="build") for command in (project.get("scripts") or {}).values()]
+    commands = [observed_command(command, path.name, category="build") for _, command in sorted((project.get("scripts") or {}).items())]
     return {"ecosystem": "python", "package_name": project.get("name"), "build_system": build_system.get("build-backend"), "dependencies": dependencies, "scripts": commands, "lockfiles": []}
 
 
@@ -144,9 +144,9 @@ def parse_package_json(path: Path) -> dict[str, Any]:
     payload = json.loads(read_manifest_text(path))
     dependencies: list[dict[str, Any]] = []
     for scope in ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]:
-        for name, specifier in (payload.get(scope) or {}).items():
+        for name, specifier in sorted((payload.get(scope) or {}).items()):
             dependencies.append(dependency(str(name), str(specifier), scope=scope))
-    scripts = [observed_command(str(command), f"{path.name}:scripts.{name}", category=classify_command(str(command))) for name, command in (payload.get("scripts") or {}).items()]
+    scripts = [observed_command(str(command), f"{path.name}:scripts.{name}", category=classify_command(str(command))) for name, command in sorted((payload.get("scripts") or {}).items())]
     return {"ecosystem": "javascript", "package_name": payload.get("name"), "build_system": "npm", "dependencies": dependencies, "scripts": scripts, "lockfiles": []}
 
 
@@ -155,7 +155,7 @@ def parse_cargo(path: Path) -> dict[str, Any]:
     package = payload.get("package") if isinstance(payload.get("package"), dict) else {}
     dependencies: list[dict[str, Any]] = []
     for scope in ["dependencies", "dev-dependencies", "build-dependencies"]:
-        for name, specifier in (payload.get(scope) or {}).items():
+        for name, specifier in sorted((payload.get(scope) or {}).items()):
             dependencies.append(dependency(str(name), json.dumps(specifier, sort_keys=True) if isinstance(specifier, dict) else str(specifier), scope=scope))
     return {"ecosystem": "rust", "package_name": package.get("name"), "build_system": "cargo", "dependencies": dependencies, "scripts": [], "lockfiles": ["Cargo.lock"]}
 

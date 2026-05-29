@@ -131,6 +131,38 @@ def test_inventory_and_provenance_generated_at_honor_source_date_epoch(tmp_path:
     assert provenance["generated_at"] == "2024-01-01T00:00:00+00:00"
 
 
+def test_root_doc_status_degrades_to_missing_on_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_oserror(_path: Path):
+        raise OSError("[WinError 206] path too long")
+
+    monkeypatch.setattr(Path, "iterdir", raise_oserror)
+
+    docs = audit_inventory.root_doc_status(tmp_path)
+
+    assert {item["status"] for item in docs} == {"missing"}
+    assert all(item["path"] is None for item in docs)
+
+
+def test_root_doc_status_is_stable_for_duplicate_root_doc_stems(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    readme_md = tmp_path / "README.md"
+    readme_rst = tmp_path / "README.rst"
+    readme_md.write_text("# md\n", encoding="utf-8")
+    readme_rst.write_text("rst\n", encoding="utf-8")
+    orders = [[readme_rst, readme_md], [readme_md, readme_rst]]
+    results: list[str | None] = []
+
+    def fake_iterdir(_path: Path):
+        return iter(orders.pop(0))
+
+    monkeypatch.setattr(Path, "iterdir", fake_iterdir)
+
+    for _ in range(2):
+        docs = audit_inventory.root_doc_status(tmp_path)
+        results.append(next(item["path"] for item in docs if item["name"] == "README"))
+
+    assert results == ["README.md", "README.md"]
+
+
 def test_inventory_skips_symlinks_before_hashing_targets(tmp_path: Path) -> None:
     repo = prepare_fixture(tmp_path)
     outside = tmp_path / "outside_secret.txt"

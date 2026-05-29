@@ -111,7 +111,10 @@ def classify_kind(path_normalized: str, binary: bool) -> str:
 
 
 def root_doc_status(root: Path) -> list[dict[str, Any]]:
-    files = [path for path in root.iterdir() if path.is_file() and not path.is_symlink()]
+    try:
+        files = sorted((path for path in root.iterdir() if path.is_file() and not path.is_symlink()), key=lambda item: item.name.upper())
+    except OSError:
+        files = []
     results: list[dict[str, Any]] = []
     for stem in ROOT_DOC_STEMS:
         found = next((path for path in files if path.stem.upper() == stem or path.name.upper() == stem), None)
