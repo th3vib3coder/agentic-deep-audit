@@ -5,13 +5,16 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import os
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .audit_evidence import evidence_for_records
+from .audit_provenance import sanitize_for_provenance
 from .limits import FileSizeLimitError, MAX_AUDIT_FILE_BYTES, read_bytes_capped
+from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 
 
@@ -63,6 +66,13 @@ def should_include(path_normalized: str, includes: list[str], excludes: list[str
     return True, None
 
 
+def exclusion_reason(path_normalized: str, excludes: list[str]) -> str | None:
+    for pattern in excludes:
+        if match_pattern(path_normalized, pattern):
+            return f"excluded by {pattern}"
+    return None
+
+
 def is_probably_binary(data: bytes) -> bool:
     if data.startswith(TEXT_BOMS):
         return False
@@ -109,6 +119,30 @@ def root_doc_status(root: Path) -> list[dict[str, Any]]:
     return results
 
 
+def iter_inventory_paths(repo_path: Path, excludes: list[str]):
+    for dirpath, dirnames, filenames in os.walk(repo_path, topdown=True, followlinks=False):
+        directory = Path(dirpath)
+        dirnames.sort()
+        filenames.sort()
+        for dirname in list(dirnames):
+            child = directory / dirname
+            path_normalized = normalize_relative(child, repo_path)
+            reason = exclusion_reason(path_normalized, excludes)
+            if reason is not None:
+                yield child, reason
+                dirnames.remove(dirname)
+                continue
+            try:
+                if child.is_symlink():
+                    yield child, "symlink skipped"
+                    dirnames.remove(dirname)
+            except OSError:
+                yield child, "unreadable directory"
+                dirnames.remove(dirname)
+        for filename in filenames:
+            yield directory / filename, None
+
+
 def scan_files(run_config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]], Path]:
     repo_path = Path(str((run_config.get("repo") or {}).get("path") or ".")).resolve()
     scope = run_config.get("scope_filters") or {}
@@ -125,20 +159,23 @@ def scan_files(run_config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[d
 
     records: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
-    for path in sorted(repo_path.rglob("*")):
+    for path, prune_reason in iter_inventory_paths(repo_path, excludes):
         path_normalized = normalize_relative(path, repo_path)
+        if prune_reason is not None:
+            skipped.append({"path": path_normalized, "reason": prune_reason})
+            continue
         include, reason = should_include(path_normalized, includes, excludes)
         if not include:
             skipped.append({"path": path_normalized, "reason": reason or "excluded"})
             continue
-        if path.is_symlink():
-            skipped.append({"path": path_normalized, "reason": "symlink skipped"})
-            continue
-        if not path.is_file():
-            continue
         try:
+            if path.is_symlink():
+                skipped.append({"path": path_normalized, "reason": "symlink skipped"})
+                continue
+            if not path.is_file():
+                continue
             data = read_bytes_capped(path, MAX_AUDIT_FILE_BYTES, "inventory file")
-        except FileSizeLimitError as exc:
+        except (OSError, PermissionError, FileSizeLimitError) as exc:
             skipped.append({"path": path_normalized, "reason": str(exc)})
             continue
         binary = is_probably_binary(data)
@@ -185,14 +222,14 @@ def inventory_markdown(records: list[dict[str, Any]], skipped: list[dict[str, st
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def run_inventory(run_config: dict[str, Any], audit_dir: Path) -> None:
     records, skipped, repo_path = scan_files(run_config)
     docs = root_doc_status(repo_path)
     now = datetime.now(timezone.utc).isoformat()
-    repo_payload = run_config.get("repo") or {"path": str(repo_path), "commit": None}
+    repo_payload = sanitize_for_provenance(run_config.get("repo") or {"path": str(repo_path), "commit": None})
     write_json(
         audit_dir / ARTIFACT_PATHS["FILE_INDEX"],
         {

@@ -317,7 +317,12 @@ def test_promoted_graphify_writes_isolated_outputs_diff_and_preserves_canonical(
         },
     )
 
-    def fake_run(command, cwd, text, capture_output, check, timeout):
+    monkeypatch.setenv("GITHUB_TOKEN", "raw-token")
+
+    def fake_run(command, cwd, env, text, encoding, errors, capture_output, check, timeout):
+        assert encoding == "utf-8"
+        assert errors == "replace"
+        assert "GITHUB_TOKEN" not in env
         output = Path(command[4])
         output.parent.mkdir(parents=True, exist_ok=True)
         altered = json.loads(original)
@@ -377,7 +382,7 @@ def test_promoted_graphify_mutating_canonical_is_restored_and_skipped(tmp_path: 
         },
     )
 
-    def mutating_run(command, cwd, text, capture_output, check, timeout):
+    def mutating_run(command, cwd, env, text, encoding, errors, capture_output, check, timeout):
         Path(command[2]).write_text('{"mutated": true}\n', encoding="utf-8")
         output = Path(command[4])
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -419,7 +424,7 @@ def test_failed_graphify_stderr_cannot_break_skipped_markdown(tmp_path: Path, mo
         },
     )
 
-    def failing_run(command, cwd, text, capture_output, check, timeout):
+    def failing_run(command, cwd, env, text, encoding, errors, capture_output, check, timeout):
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="bad\n```html\n<script>x()</script>\n```")
 
     monkeypatch.setattr(graph_renderers, "PLUGIN_ROOT", plugin_root)
@@ -459,7 +464,7 @@ def test_promoted_graphify_deleting_canonical_is_restored_and_skipped(tmp_path: 
         },
     )
 
-    def deleting_run(command, cwd, text, capture_output, check, timeout):
+    def deleting_run(command, cwd, env, text, encoding, errors, capture_output, check, timeout):
         Path(command[2]).unlink()
         output = Path(command[4])
         output.parent.mkdir(parents=True, exist_ok=True)

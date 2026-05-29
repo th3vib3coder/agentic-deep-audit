@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
-
 from .limits import FileSizeLimitError, read_text_auto_capped
 from .models import ARTIFACT_PATHS, load_schema_registry
 
@@ -17,6 +15,9 @@ SCHEMA_BY_ARTIFACT_KEY = {
     "NETWORK_POLICY": "network_policy",
     "DEFAULT_NETWORK_POLICY": "network_policy",
     "BLOCKED_COMMANDS_ALLOWLIST": "blocked_commands",
+    "FILE_INDEX": "file_index",
+    "PROVENANCE": "provenance",
+    "MANIFESTS": "manifests",
     "TOOL_STATUS": "tool_status",
     "EVIDENCE_INDEX": "evidence_index",
     "MODULE_GRAPH": "module_graph",
@@ -44,12 +45,9 @@ SCHEMA_BY_ARTIFACT_KEY = {
 SCHEMA_EXEMPT_ARTIFACT_KEYS = {
     "BLOCKED_COMMANDS_ATTEMPTS",
     "CI_MAP",
-    "FILE_INDEX",
     "GRAPH_EDGES",
     "GRAPH_NODES",
     "GRAPHIFY_GRAPH",
-    "MANIFESTS",
-    "PROVENANCE",
     "SBOM",
     "VALIDATION_REPORT_JSON",
 }
@@ -102,6 +100,8 @@ def validate_json_artifact_schemas(audit_dir: Path) -> list[str]:
                 errors.append(f"json_schema_unmapped: {relative}: no schema mapping or explicit exemption")
             continue
         schema = registry[schema_name].schema
+        from jsonschema import Draft202012Validator
+
         validator = Draft202012Validator(schema)
         for error in sorted(validator.iter_errors(payload), key=lambda item: list(item.path)):
             location = ".".join(str(part) for part in error.path) or "<root>"

@@ -42,7 +42,11 @@ def lint_plan_file(path: Path, root: Path) -> list[Violation]:
     text = path.read_text(encoding="utf-8", errors="replace")
     relative = path.relative_to(root).as_posix()
     violations: list[Violation] = []
-    for step_id, block in step_blocks(text):
+    blocks = step_blocks(text)
+    if not blocks:
+        violations.append(Violation(relative, "N/A", "no step blocks"))
+        return violations
+    for step_id, block in blocks:
         for field in REQUIRED_FIELDS:
             if field not in block:
                 violations.append(Violation(relative, step_id, f"missing {field}"))
@@ -51,7 +55,7 @@ def lint_plan_file(path: Path, root: Path) -> list[Violation]:
 
 def lint_plan(plan_dir: Path) -> list[Violation]:
     violations: list[Violation] = []
-    for path in sorted(plan_dir.glob("*.md")):
+    for path in sorted(plan_dir.glob("*_seq_*.md")):
         if path.name in {"000_index.md", "900_traceability_to_general_plan.md", "901_internal_review_notes.md", "902_claude_review_packet.md"}:
             continue
         violations.extend(lint_plan_file(path, plan_dir))

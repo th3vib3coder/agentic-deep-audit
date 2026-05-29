@@ -95,6 +95,13 @@ def resolve_repo_file(repo_path: Path, path_value: str) -> Path | None:
     return candidate
 
 
+def resolve_repo_existing_file(repo_path: Path, path_value: str) -> Path | None:
+    candidate = resolve_repo_file(repo_path, path_value)
+    if candidate is None or not candidate.is_file():
+        return None
+    return candidate
+
+
 def sha256_file_capped(path: Path, max_bytes: int = MAX_AUDIT_FILE_BYTES, label: str = "file") -> str:
     ensure_file_size(path, max_bytes, label)
     digest = hashlib.sha256()

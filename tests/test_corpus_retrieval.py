@@ -72,6 +72,16 @@ def test_corpus_schema_creates_required_tables() -> None:
     assert "corpus_fts" in tables
 
 
+def test_corpus_schema_omits_dead_secondary_indexes() -> None:
+    with sqlite3.connect(":memory:") as connection:
+        create_schema(connection)
+        indexes = {row[1] for row in connection.execute("PRAGMA index_list(symbols)")}
+        indexes.update(row[1] for row in connection.execute("PRAGMA index_list(graph_nodes)"))
+        indexes.update(row[1] for row in connection.execute("PRAGMA index_list(files)"))
+
+    assert {"idx_symbols_name", "idx_graph_nodes_label", "idx_files_kind_path"}.isdisjoint(indexes)
+
+
 def test_text_file_body_enforces_containment_and_size_cap(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

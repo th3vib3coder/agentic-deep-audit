@@ -9,11 +9,13 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from fixture_matrix import AUTHORITATIVE_FIXTURES
+
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PLUGIN_ROOT / "src"
 FIXTURE_ROOT = PLUGIN_ROOT / "tests" / "fixtures"
-DEFAULT_FIXTURES = ["mixed_risky", "performance_quality_project", "license_manifest"]
+DEFAULT_FIXTURES = list(AUTHORITATIVE_FIXTURES)
 REQUIRED_ARTIFACTS = ["RUN_CONFIG.json", "FILE_INDEX.json", "MODULE_GRAPH.json", "wiki/000_home.md", "VALIDATION_REPORT.md"]
 
 

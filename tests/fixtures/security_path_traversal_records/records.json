@@ -1,0 +1,14 @@
+[
+  {
+    "path": "../outside.txt",
+    "path_normalized": "../outside.txt",
+    "kind": "text",
+    "binary": false
+  },
+  {
+    "path": "safe.txt",
+    "path_normalized": "safe.txt",
+    "kind": "text",
+    "binary": false
+  }
+]

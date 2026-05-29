@@ -45,11 +45,24 @@ def clean_build_artifacts() -> None:
             shutil.rmtree(target, ignore_errors=True)
 
 
+def copy_package_source(tmp_path: Path) -> Path:
+    source = tmp_path / "package-src"
+    if source.exists():
+        shutil.rmtree(source)
+    shutil.copytree(
+        PLUGIN_ROOT,
+        source,
+        ignore=shutil.ignore_patterns("build", "dist", "*.egg-info", "__pycache__", ".pytest_cache", "*.pyc"),
+    )
+    return source
+
+
 def build_wheel(tmp_path: Path) -> Path:
     clean_build_artifacts()
+    source = copy_package_source(tmp_path)
     wheel_dir = tmp_path / "wheels"
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", str(PLUGIN_ROOT), "--no-deps", "--no-build-isolation", "-w", str(wheel_dir)],
+        [sys.executable, "-m", "pip", "wheel", str(source), "--no-deps", "--no-build-isolation", "-w", str(wheel_dir)],
         text=True,
         capture_output=True,
         check=False,
@@ -162,12 +175,16 @@ def test_installed_wheel_loads_runtime_resources_and_adapter_decision(tmp_path: 
             str(python),
             "-c",
             "\n".join(
-                [
-                    "from pathlib import Path",
-                    "import agentic_deep_audit",
-                    "from agentic_deep_audit.models import PLUGIN_ROOT, SCHEMA_FILES, load_schema_registry",
-                    "from agentic_deep_audit.resources import policy_dir, template_dir",
-                    "from agentic_deep_audit.adapters.loader import validate_adapter_promotion, AdapterBlockedPrePromotion",
+                    [
+                        "from pathlib import Path",
+                        "import agentic_deep_audit",
+                        "import agentic_deep_audit.artifact_io",
+                        "import agentic_deep_audit.bootstrap",
+                        "import agentic_deep_audit.config",
+                        "import agentic_deep_audit.validate_json_schema",
+                        "from agentic_deep_audit.models import PLUGIN_ROOT, SCHEMA_FILES, load_schema_registry",
+                        "from agentic_deep_audit.resources import policy_dir, template_dir",
+                        "from agentic_deep_audit.adapters.loader import validate_adapter_promotion, AdapterBlockedPrePromotion",
                     "package_root = Path(agentic_deep_audit.__file__).resolve().parent",
                     "assert Path(PLUGIN_ROOT).resolve() == package_root, f'{PLUGIN_ROOT} != {package_root}'",
                     "assert len(load_schema_registry()) == len(SCHEMA_FILES)",

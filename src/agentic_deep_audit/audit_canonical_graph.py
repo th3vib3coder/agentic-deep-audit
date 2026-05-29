@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .artifact_io import write_json_artifact
 from .audit_graph_renderers import write_graph_renderer_outputs, write_graphify_outputs
 from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
@@ -43,7 +44,7 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def stable_slug(value: str) -> str:

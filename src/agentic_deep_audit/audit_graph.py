@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters.base import AdapterStatus, append_tool_status
+from .artifact_io import write_json_artifact
 from .audit_canonical_graph import run_canonical_graph_outputs
 from .limits import FileSizeLimitError, read_bytes_capped, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
@@ -51,7 +52,7 @@ class GraphState:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def load_json(path: Path) -> dict[str, Any]:

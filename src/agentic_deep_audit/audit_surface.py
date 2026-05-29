@@ -13,6 +13,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility.
     import tomli as tomllib
 
 from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
+from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 from .sanitize import sanitize_markdown
 
@@ -47,7 +48,7 @@ ENV_PATTERNS = [
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def load_json(path: Path) -> dict[str, Any]:

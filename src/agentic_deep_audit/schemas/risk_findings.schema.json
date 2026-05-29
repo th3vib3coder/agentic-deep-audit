@@ -5,7 +5,9 @@
   "additionalProperties": false,
   "required": [
     "schema_version",
-    "findings"
+    "findings",
+    "promotion_policy",
+    "source_tools"
   ],
   "properties": {
     "schema_version": {
@@ -76,7 +78,7 @@
       }
     },
     "promotion_policy": {
-      "type": "string"
+      "const": "heuristics_not_promoted_without_external_tool_confirmation"
     },
     "source_tools": {
       "type": "array",

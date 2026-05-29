@@ -6,9 +6,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from agentic_deep_audit import bootstrap as bootstrap_module
 from agentic_deep_audit.audit_validate import validate_audit, validate_phase0
-from agentic_deep_audit.bootstrap import PHASES
+from agentic_deep_audit.bootstrap import PHASES, BootstrapError, copy_snapshot
 from agentic_deep_audit.config import sha256_file
+from agentic_deep_audit.limits import FileSizeLimitError
 from agentic_deep_audit.models import ARTIFACT_PATHS
 
 
@@ -124,6 +128,63 @@ def test_network_policy_snapshot_when_present(tmp_path: Path) -> None:
     assert run_config["provenance"]["network_policy_snapshot_sha256"] == sha256_file(policy)
     assert sha256_file(audit_dir / ARTIFACT_PATHS["NETWORK_POLICY_SNAPSHOT"]) == sha256_file(policy)
     assert validate_phase0(audit_dir).ok
+
+
+def test_copy_snapshot_uses_capped_reader(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "snapshot-source.json"
+    destination = tmp_path / "snapshot-copy.json"
+    source.write_bytes(b"uncapped original")
+    calls: list[tuple[Path, str | None]] = []
+
+    def capped_read(path: Path, **kwargs: object) -> bytes:
+        calls.append((path, kwargs.get("label") if isinstance(kwargs.get("label"), str) else None))
+        return b"capped bytes"
+
+    monkeypatch.setattr(bootstrap_module, "read_bytes_capped", capped_read)
+
+    snapshot_hash = copy_snapshot(source, destination)
+
+    assert calls == [(source, "bootstrap snapshot")]
+    assert destination.read_bytes() == b"capped bytes"
+    assert snapshot_hash == sha256_file(destination)
+
+
+def test_copy_snapshot_converts_size_cap_to_bootstrap_error(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "snapshot-source.json"
+    destination = tmp_path / "snapshot-copy.json"
+    source.write_bytes(b"oversized")
+
+    def fail_on_read(path: Path, **kwargs: object) -> bytes:
+        raise FileSizeLimitError("bootstrap snapshot exceeds size cap: 10 > 1 bytes")
+
+    monkeypatch.setattr(bootstrap_module, "read_bytes_capped", fail_on_read)
+
+    with pytest.raises(BootstrapError, match="snapshot read failed: .*exceeds size cap"):
+        copy_snapshot(source, destination)
+
+    assert not destination.exists()
+
+
+def test_bootstrap_main_reports_oversized_snapshot_without_traceback(tmp_path: Path, monkeypatch, capsys) -> None:
+    policy = tmp_path / ".network_policy.json"
+    policy.write_text('{"schema_version":"1.0"}\n', encoding="utf-8")
+    config = write_config(tmp_path, network_policy_file=".network_policy.json")
+
+    def capped_read(path: Path, **kwargs: object) -> bytes:
+        if path == policy:
+            raise FileSizeLimitError("bootstrap snapshot exceeds size cap: 10 > 1 bytes")
+        return path.read_bytes()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(bootstrap_module, "read_bytes_capped", capped_read)
+
+    exit_code = bootstrap_module.main(["--config", str(config)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "error: snapshot read failed:" in captured.err
+    assert "exceeds size cap" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_tool_status_records_version_or_skip_reason_and_progress_phases(tmp_path: Path) -> None:

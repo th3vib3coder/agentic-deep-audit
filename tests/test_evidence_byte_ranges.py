@@ -387,18 +387,24 @@ def test_sync_evidence_identity_uses_capped_bom_aware_reader(tmp_path: Path, mon
     audit_dir = tmp_path / "audit"
     audit_dir.mkdir()
     evidence_path = audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]
-    evidence_path.write_text('{"repo": {}, "evidence": []}\n', encoding="utf-8")
+    repo_path = tmp_path / "repo"
+    evidence_payload = {
+        "schema_version": "1.0",
+        "repo": {"path": str(repo_path), "commit": ""},
+        "evidence": [],
+    }
+    evidence_path.write_text(json.dumps(evidence_payload) + "\n", encoding="utf-8")
     calls: list[Path] = []
 
     def capped_reader(path: Path, **_: object) -> str:
         calls.append(path)
-        return '{"repo": {}, "evidence": []}\n'
+        return json.dumps(evidence_payload) + "\n"
 
     monkeypatch.setattr(audit_evidence, "read_text_auto_capped", capped_reader)
 
     audit_evidence.sync_evidence_identity_from_provenance(
         audit_dir,
-        {"git": {"commit": "a" * 40, "target_path": str(tmp_path / "repo")}},
+        {"git": {"commit": "a" * 40, "target_path": str(repo_path)}},
     )
 
     assert calls == [evidence_path]

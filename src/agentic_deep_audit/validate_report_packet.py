@@ -25,9 +25,9 @@ def validate_report(audit_dir: Path, errors: list[str]) -> None:
     if not path.exists():
         return
     try:
-        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="report")
-    except (OSError, FileSizeLimitError) as exc:
-        errors.append(f"REPORT.md invalid artifact: {exc}")
+        text = read_text_auto_capped(path, encoding="utf-8", label="report")
+    except (OSError, UnicodeDecodeError, FileSizeLimitError) as exc:
+        errors.append(f"REPORT.md invalid artifact: {type(exc).__name__}: {exc}")
         return
     for section_id in GOAL_SECTION_IDS:
         if f"## {section_id} -" not in text:
@@ -42,9 +42,9 @@ def validate_open_questions(audit_dir: Path, errors: list[str]) -> None:
     if not path.exists():
         return
     try:
-        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="open questions")
-    except (OSError, FileSizeLimitError) as exc:
-        errors.append(f"OPEN_QUESTIONS.md invalid artifact: {exc}")
+        text = read_text_auto_capped(path, encoding="utf-8", label="open questions")
+    except (OSError, UnicodeDecodeError, FileSizeLimitError) as exc:
+        errors.append(f"OPEN_QUESTIONS.md invalid artifact: {type(exc).__name__}: {exc}")
         return
     for artifact, _reason in skipped_artifacts(audit_dir):
         if artifact not in text:
@@ -58,9 +58,9 @@ def validate_review_ledger(audit_dir: Path, errors: list[str]) -> None:
     if not path.exists():
         return
     try:
-        lines = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="review ledger").splitlines()
-    except (OSError, FileSizeLimitError) as exc:
-        errors.append(f"REVIEW_LEDGER.md invalid artifact: {exc}")
+        lines = read_text_auto_capped(path, encoding="utf-8", label="review ledger").splitlines()
+    except (OSError, UnicodeDecodeError, FileSizeLimitError) as exc:
+        errors.append(f"REVIEW_LEDGER.md invalid artifact: {type(exc).__name__}: {exc}")
         return
     for line in lines:
         if not line.startswith("| `"):
@@ -89,9 +89,9 @@ def validate_review_packet(audit_dir: Path, errors: list[str]) -> None:
     if not validation_passed(audit_dir):
         errors.append("ADVERSARIAL_REVIEW_PACKET.md exists before zero-blocker validation")
     try:
-        text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="review packet")
-    except (OSError, FileSizeLimitError) as exc:
-        errors.append(f"ADVERSARIAL_REVIEW_PACKET.md invalid artifact: {exc}")
+        text = read_text_auto_capped(path, encoding="utf-8", label="review packet")
+    except (OSError, UnicodeDecodeError, FileSizeLimitError) as exc:
+        errors.append(f"ADVERSARIAL_REVIEW_PACKET.md invalid artifact: {type(exc).__name__}: {exc}")
         return
     for section in ["## Artifact Inventory", "## Skipped Artifacts", "## Commands Run", "## Fixture Results", "## Residual Risks"]:
         if section not in text:

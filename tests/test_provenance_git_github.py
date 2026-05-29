@@ -79,6 +79,21 @@ def run_git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, text=True, capture_output=True)
 
 
+def test_normalize_git_toplevel_path_accepts_msys_drive_prefix(tmp_path: Path) -> None:
+    normalized = audit_provenance.normalize_git_toplevel_path("/c/Users/Test/project", tmp_path)
+    if os.name == "nt":
+        assert str(normalized).replace("\\", "/").lower().startswith("c:/users/test/project")
+    else:
+        assert normalized == Path("/c/Users/Test/project").resolve()
+
+
+def symlink_or_skip(target: Path, link: Path, *, target_is_directory: bool = False) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+
 def prepare_git_repo(tmp_path: Path) -> Path:
     if not git_available():
         pytest.skip("git unavailable")
@@ -316,3 +331,53 @@ def test_run_git_command_hardens_environment_and_config(monkeypatch: pytest.Monk
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_parse_tags_skips_symlinked_tag_refs(tmp_path: Path) -> None:
+    git_dir = tmp_path / ".git"
+    tag_root = git_dir / "refs" / "tags"
+    tag_root.mkdir(parents=True)
+    (tag_root / "v1.0.0").write_text("0" * 40 + "\n", encoding="utf-8")
+    outside = tmp_path / "outside-tag"
+    outside.write_text("1" * 40 + "\n", encoding="utf-8")
+    symlink_or_skip(outside, tag_root / "leaked")
+
+    tags = audit_provenance.parse_tags(git_dir)
+
+    assert tags == ["v1.0.0"]
+
+
+def test_parse_tags_prunes_symlink_directory_children_without_os_symlink_privilege(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    git_dir = tmp_path / ".git"
+    tag_root = git_dir / "refs" / "tags"
+    leaked_dir = tag_root / "leaked"
+    leaked_dir.mkdir(parents=True)
+    (tag_root / "v1.0.0").write_text("0" * 40 + "\n", encoding="utf-8")
+    (leaked_dir / "secret").write_text("1" * 40 + "\n", encoding="utf-8")
+    original_is_symlink = Path.is_symlink
+
+    def fake_is_symlink(path: Path) -> bool:
+        if path == leaked_dir:
+            return True
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", fake_is_symlink)
+
+    tags = audit_provenance.parse_tags(git_dir)
+
+    assert tags == ["v1.0.0"]
+
+
+def test_parse_submodules_rejects_unsafe_paths_and_redacts_urls(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".gitmodules").write_text(
+        '[submodule "escape"]\n'
+        "\tpath = ../../outside\n"
+        "\turl = https://user:pass@example.com/lib.git\n",
+        encoding="utf-8",
+    )
+
+    submodules = audit_provenance.parse_submodules(repo)
+
+    assert submodules == [{"name": "escape", "path": None, "url": "https://example.com/lib.git"}]

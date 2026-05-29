@@ -13,6 +13,7 @@ import agentic_deep_audit.audit_telemetry as audit_telemetry
 from agentic_deep_audit.audit_telemetry import CATEGORIES, default_parameters, is_bot_author, issue_pr_record, normalize_identity, pseudonymize_identity
 from agentic_deep_audit.limits import FileSizeLimitError
 from agentic_deep_audit.audit_validate import validate_audit
+from agentic_deep_audit.validate_telemetry import validate_project_telemetry_artifacts
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 
 
@@ -269,3 +270,21 @@ def test_project_telemetry_json_requires_all_expected_categories(tmp_path: Path)
 
     assert not validation.ok
     assert any("exactly one record per expected category" in error for error in validation.errors)
+
+
+def test_project_telemetry_validator_requires_evidence_ids_array(tmp_path: Path) -> None:
+    repo = tmp_path / "no-git"
+    shutil.copytree(FIXTURES / "no_git_repo", repo)
+    config = write_config(repo)
+    result = run_cli("telemetry", "--config", str(config), cwd=repo)
+    assert result.returncode == 0, result.stderr
+    audit_dir = repo / "audit"
+    telemetry_path = audit_dir / ARTIFACT_PATHS["PROJECT_TELEMETRY"]
+    payload = json.loads(telemetry_path.read_text(encoding="utf-8"))
+    payload["records"][0]["evidence_ids"] = None
+    telemetry_path.write_text(json.dumps(payload), encoding="utf-8")
+    evidence_index = json.loads((audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]).read_text(encoding="utf-8"))
+
+    errors = validate_project_telemetry_artifacts(audit_dir, evidence_index)
+
+    assert any("requires evidence_ids array" in error for error in errors)

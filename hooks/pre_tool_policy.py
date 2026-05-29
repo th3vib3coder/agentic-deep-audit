@@ -83,6 +83,8 @@ def verify_runtime_ready(strict: bool = False) -> int | None:
                 cwd=str(PLUGIN_ROOT),
                 env={**os.environ, "PYTHONPATH": str(SRC_ROOT)},
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 capture_output=True,
                 check=False,
                 timeout=10,
@@ -128,12 +130,23 @@ def tool_requires_policy(tool_name: str) -> bool:
 
 
 def audit_dir_from_event(event: dict) -> Path:
+    cwd_value = event.get("cwd")
+    cwd = Path(cwd_value) if isinstance(cwd_value, str) and cwd_value else Path(os.getcwd())
+    default = cwd / "audit"
     tool_input = event.get("tool_input") if isinstance(event.get("tool_input"), dict) else {}
     explicit = tool_input.get("audit_dir") or event.get("audit_dir")
     if isinstance(explicit, str) and explicit:
-        return Path(explicit)
-    cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else os.getcwd()
-    return Path(cwd) / "audit"
+        # OQ-M22: the PreToolUse event is untrusted input. An arbitrary audit_dir would let a
+        # crafted event create directories / write the blocked-attempts log to any path
+        # (append_blocked_attempt does mkdir(parents=True) + write). Contain it within cwd.
+        candidate = Path(explicit)
+        resolved = (candidate if candidate.is_absolute() else cwd / candidate).resolve()
+        try:
+            resolved.relative_to(cwd.resolve())
+        except ValueError:
+            return default
+        return resolved
+    return default
 
 
 def run_decision(command: list[str], origin: str, audit_dir: Path, block_code: int = 1, strict_runtime: bool = False, attempt_id: str | None = None) -> int:

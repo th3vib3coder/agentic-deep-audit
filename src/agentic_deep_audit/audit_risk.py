@@ -9,6 +9,7 @@ from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
 from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
+from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 from .sanitize import sanitize_markdown
 
@@ -21,7 +22,7 @@ RISK_PROMOTION_POLICY = "heuristics_not_promoted_without_external_tool_confirmat
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def load_json(path: Path) -> dict[str, Any]:

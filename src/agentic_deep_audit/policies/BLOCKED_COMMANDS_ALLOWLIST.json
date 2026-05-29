@@ -6,6 +6,6 @@
     {"command": "python", "subcommands": ["-m agentic_deep_audit", "-m agentic_deep_audit.cli", "-m agentic_deep_audit.gate"], "network": false},
     {"command": "graphify", "subcommands": ["--input", "--version"], "network": false}
   ],
-  "blocked_always": ["npm", "pip", "make", "bash", "sh", "powershell", "cmd", "docker", "docker-compose", "podman", "nerdctl", "buildah", "crictl", "containerd"],
+  "blocked_always": ["npm", "pip", "make", "bash", "sh", "dash", "zsh", "fish", "ksh", "powershell", "pwsh", "cmd", "docker", "docker-compose", "podman", "nerdctl", "buildah", "crictl", "containerd"],
   "sandbox_only": ["pytest", "cargo test", "go test", "npm test"]
 }

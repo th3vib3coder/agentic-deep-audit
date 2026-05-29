@@ -10,11 +10,11 @@ import os
 import re
 import shutil
 from collections import Counter
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
-from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped, resolve_repo_existing_file
 from .models import ARTIFACT_PATHS
 from .sanitize import clean_markdown_text
 
@@ -444,24 +444,6 @@ def list_records(payload: dict[str, Any], keys: list[str]) -> list[dict[str, Any
     return []
 
 
-def resolve_repo_relative_file(repo_path: Path, path_value: str) -> Path | None:
-    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
-        return None
-    posix = PurePosixPath(path_value)
-    windows = PureWindowsPath(path_value)
-    if posix.is_absolute() or windows.is_absolute() or windows.drive or windows.root:
-        return None
-    if ".." in posix.parts or ".." in windows.parts:
-        return None
-    root = repo_path.resolve()
-    candidate = (root / path_value).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        return None
-    return candidate if candidate.is_file() else None
-
-
 def write_json_category(audit_dir: Path, run_config: dict[str, Any], artifact_key: str, folder: str, title: str, page_type: str, keys: list[str]) -> None:
     payload = load_json(audit_dir / ARTIFACT_PATHS[artifact_key])
     records = list_records(payload, keys)
@@ -485,7 +467,7 @@ def decision_paths(audit_dir: Path) -> list[tuple[str, list[str]]]:
         if not isinstance(record, dict):
             continue
         path_value = str(record.get("path_normalized") or record.get("path") or "")
-        marker_path = resolve_repo_relative_file(repo_path, path_value)
+        marker_path = resolve_repo_existing_file(repo_path, path_value)
         if marker_path is None:
             continue
         name = Path(path_value).name.lower()

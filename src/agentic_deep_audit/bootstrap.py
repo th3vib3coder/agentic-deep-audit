@@ -13,7 +13,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .artifact_io import write_json_artifact
 from .config import ArgvOverrides, ConfigError, load_config_file, load_run_config, normalize_run_config, sha256_file
+from .limits import FileSizeLimitError, read_bytes_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -85,11 +87,14 @@ def resolve_output_dir(output_dir: str, cwd: Path) -> Path:
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def copy_snapshot(source: Path, destination: Path) -> str:
-    data = source.read_bytes()
+    try:
+        data = read_bytes_capped(source, label="bootstrap snapshot")
+    except FileSizeLimitError as exc:
+        raise BootstrapError(f"snapshot read failed: {source}: {exc}") from exc
     destination.write_bytes(data)
     return sha256_file(destination)
 
@@ -112,7 +117,7 @@ def local_execution_roots(root: Path) -> list[Path]:
     return list(dict.fromkeys(roots))
 
 
-def git_probe_env() -> dict[str, str]:
+def subprocess_probe_env() -> dict[str, str]:
     keep = {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TMP", "TEMP"}
     env = {key: value for key, value in os.environ.items() if key.upper() in keep}
     env.update(
@@ -128,6 +133,10 @@ def git_probe_env() -> dict[str, str]:
         }
     )
     return env
+
+
+def git_probe_env() -> dict[str, str]:
+    return subprocess_probe_env()
 
 
 def skipped_tool_status(tool: str, version_args: list[str], reason: str, notes: list[str] | None = None, exit_code: int | None = None) -> dict[str, Any]:
@@ -165,7 +174,7 @@ def detect_command(tool: str, version_args: list[str], allowed_root: Path | None
             notes=[str(resolved_command), f"target_root={matched_root}"],
         )
     command = [str(resolved_command), *version_args]
-    env = None
+    env = subprocess_probe_env()
     if tool == "git":
         command = [str(resolved_command), *GIT_SAFE_CONFIG, *version_args]
         env = git_probe_env()

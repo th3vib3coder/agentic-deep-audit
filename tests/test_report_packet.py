@@ -7,10 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agentic_deep_audit.audit_report import ReportGateError, artifact_inventory, generate_report_artifacts, validation_passed
+from agentic_deep_audit.audit_report import ReportGateError, artifact_inventory, generate_report_artifacts, report_sections, validation_passed
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
-from agentic_deep_audit.validate_report_packet import validate_review_packet
+from agentic_deep_audit.validate_report_packet import validate_report_artifacts, validate_review_packet
 
 SRC_ROOT = PLUGIN_ROOT / "src"
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
@@ -65,6 +65,25 @@ def test_validate_generates_final_report_open_questions_ledger_and_packet(tmp_pa
     assert validate_audit(audit_dir).ok
 
 
+def test_report_artifact_validation_rejects_invalid_utf8_markdown(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    artifacts = {
+        ARTIFACT_PATHS["REPORT"]: "REPORT.md invalid artifact",
+        ARTIFACT_PATHS["OPEN_QUESTIONS"]: "OPEN_QUESTIONS.md invalid artifact",
+        ARTIFACT_PATHS["REVIEW_LEDGER"]: "REVIEW_LEDGER.md invalid artifact",
+        ARTIFACT_PATHS["ADVERSARIAL_REVIEW_PACKET"]: "ADVERSARIAL_REVIEW_PACKET.md invalid artifact",
+    }
+    for artifact, expected in artifacts.items():
+        for path in artifacts:
+            target = audit_dir / path
+            if target.exists():
+                target.unlink()
+        (audit_dir / artifact).write_bytes(b"\xffnot-valid-utf8")
+        errors = validate_report_artifacts(audit_dir)
+        assert any(expected in error and "UnicodeDecodeError" in error for error in errors), (artifact, errors)
+
+
 def test_generate_report_artifacts_rechecks_fresh_artifacts_before_packet(tmp_path: Path) -> None:
     audit_dir = build_validated_audit(tmp_path)
     packet = audit_dir / ARTIFACT_PATHS["ADVERSARIAL_REVIEW_PACKET"]
@@ -82,6 +101,46 @@ def test_generate_report_artifacts_rechecks_fresh_artifacts_before_packet(tmp_pa
         raise AssertionError("ReportGateError was not raised")
 
     assert not packet.exists()
+
+
+def test_report_sections_distinguish_missing_and_corrupt_inputs(tmp_path: Path) -> None:
+    # OQ-B03 / T8-B11: a MISSING or CORRUPT input artifact must surface as "unknown"
+    # in the report, never as a confident "0" (which reads as "codebase empty" when an
+    # upstream phase actually crashed or produced nothing).
+    audit_dir = build_validated_audit(tmp_path)
+    graph_path = audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]
+    assert graph_path.exists(), "fixture precondition: MODULE_GRAPH should be generated"
+
+    arch_ok = report_sections(audit_dir)["GQ01_ARCHITECTURE"]
+    assert "unknown" not in arch_ok  # present input renders real counts, no regression
+
+    graph_path.write_text("{ not valid json", encoding="utf-8")
+    arch_corrupt = report_sections(audit_dir)["GQ01_ARCHITECTURE"]
+    assert "unknown (corrupt)" in arch_corrupt
+    assert "`0` nodes" not in arch_corrupt
+
+    graph_path.unlink()
+    arch_missing = report_sections(audit_dir)["GQ01_ARCHITECTURE"]
+    assert "unknown (missing)" in arch_missing
+    assert "`0` nodes" not in arch_missing
+
+
+def test_report_sections_count_keys_match_artifact_shapes(tmp_path: Path) -> None:
+    # OQ-N01/OQ-N02: report counts must use the real artifact keys, else risk/perf signals
+    # silently render 0. SUSPICIOUS_BEHAVIORS top-level list is 'behaviors' (not 'records');
+    # AUDIT_RUNTIME_METRICS records phases under the 'phase_durations_ms' dict (not 'phases').
+    audit_dir = build_validated_audit(tmp_path)
+    (audit_dir / ARTIFACT_PATHS["SUSPICIOUS_BEHAVIORS"]).write_text(
+        json.dumps({"schema_version": "1.0", "behaviors": [{"behavior_id": "susp-000001"}, {"behavior_id": "susp-000002"}, {"behavior_id": "susp-000003"}]}) + "\n",
+        encoding="utf-8",
+    )
+    (audit_dir / ARTIFACT_PATHS["AUDIT_RUNTIME_METRICS"]).write_text(
+        json.dumps({"schema_version": "1.0", "phase_durations_ms": {"inventory": {"duration_ms": 5}, "manifest": 9, "graph": {"duration_ms": 7}, "surface": {"skipped_reason": "not instrumented"}}}) + "\n",
+        encoding="utf-8",
+    )
+    sections = report_sections(audit_dir)
+    assert "Suspicious behavior records: `3`" in sections["GQ06_RISK"]  # was always `0` (wrong key 'records')
+    assert "Runtime metric phases recorded: `3`" in sections["GQ03_PERFORMANCE"]  # 3 instrumented of 4 entries; int legacy shape is valid
 
 
 def test_artifact_inventory_excludes_secret_named_files(tmp_path: Path) -> None:

@@ -1,0 +1,13 @@
+schema_version: "1.0"
+repo:
+  kind: "local"
+  path: "."
+  github: null
+profile: "minimal"
+mode: "source-audit"
+output_dir: "audit"
+scope_filters:
+  include: ["**/*"]
+  exclude: [".git/**", "node_modules/**"]
+target_context: "MIT downstream"
+binary_triage_consent: false

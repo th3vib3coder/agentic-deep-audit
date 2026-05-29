@@ -262,6 +262,8 @@ def test_root_license_reports_nested_incompatible_license(tmp_path: Path) -> Non
     assert any(item["scope"] == "subtree_root" and item["declared_license"] == "GPL-3.0" for item in summary["license_file_detections"])
     assert summary["root_license_conflict_count"] == 1
     assert summary["incompatible_license_files"][0]["path"] == "packages/gpl/LICENSE"
+    assert summary["license_files_differing_from_root"] == summary["incompatible_license_files"]
+    assert summary["root_license_conflict_basis"] == "declared_license_differs_from_selected_root_license"
 
 
 def test_binary_triage_without_consent_does_not_read_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -281,3 +283,19 @@ def test_binary_triage_without_consent_does_not_read_bytes(tmp_path: Path, monke
     assert artifact["requires_operator_consent"] is True
     assert artifact["mime_detected"] is None
     assert "not read" in artifact["skipped_reason"]
+
+
+def test_root_license_surfaces_unclassifiable_license_text(tmp_path: Path) -> None:
+    # N2: a readable LICENSE file whose text cannot be classified must still be surfaced in
+    # license_file_detections (as skipped), not silently vanish from the summary.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "LICENSE").write_text("Proprietary software. All rights reserved. Non-standard bespoke terms apply.\n", encoding="utf-8")
+    file_index = {"repo": {"path": str(repo)}, "records": [{"path": "LICENSE", "kind": "docs", "binary": False, "size_bytes": 1}]}
+
+    payload = license_cards({}, tmp_path / "audit", file_index, {"records": []}, repo, {})
+    summary = payload["summary"]
+
+    assert summary["root_license"] is None
+    detections = summary["license_file_detections"]
+    assert any(item.get("path") == "LICENSE" and "unclassif" in str(item.get("skipped_reason", "")) for item in detections)

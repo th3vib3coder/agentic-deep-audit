@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any
 
 from .audit_evidence import sha256_range
 from .audit_validate_common import ValidationResult, load_json
-from .limits import FileSizeLimitError, read_bytes_capped, read_text_auto_capped
+from .limits import FileSizeLimitError, read_bytes_capped, read_text_auto_capped, resolve_repo_file
 from .mcp_policy import looks_secret
 from .models import ARTIFACT_PATHS
 
@@ -153,8 +153,6 @@ def validate_evidence_provenance_drift(audit_dir: Path, evidence_index: dict[str
             if not isinstance(item.get("start_byte"), int) or not isinstance(item.get("end_byte"), int):
                 continue
             path_value = str(item.get("path") or "")
-            if not is_safe_relative_evidence_path(path_value):
-                continue
             source = resolve_evidence_source(Path(str((evidence_index.get("repo") or {}).get("path") or ".")), path_value)
             if source is None:
                 continue
@@ -231,26 +229,8 @@ def collect_unreachable_evidence_ids(value: Any, path: str, available: set[str],
                 stack.append((current[index], f"{current_path}[{index}]", depth + 1))
 
 
-def is_safe_relative_evidence_path(path_value: str) -> bool:
-    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
-        return False
-    posix_path = PurePosixPath(path_value)
-    windows_path = PureWindowsPath(path_value)
-    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive or windows_path.root:
-        return False
-    return ".." not in posix_path.parts and ".." not in windows_path.parts
-
-
 def resolve_evidence_source(repo_path: Path, path_value: str) -> Path | None:
-    if not is_safe_relative_evidence_path(path_value):
-        return None
-    repo_root = repo_path.resolve()
-    candidate = (repo_root / path_value).resolve()
-    try:
-        candidate.relative_to(repo_root)
-    except ValueError:
-        return None
-    return candidate
+    return resolve_repo_file(repo_path, path_value)
 
 
 def validate_provenance_artifact(audit_dir: Path) -> ValidationResult:

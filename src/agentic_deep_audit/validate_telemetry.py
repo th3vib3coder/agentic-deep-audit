@@ -66,9 +66,13 @@ def validate_project_telemetry_artifacts(audit_dir: Path, evidence_index: dict[s
             errors.append(f"PROJECT_TELEMETRY.json skipped record {record_id or index} requires limitations")
         if record.get("status") == "observed" and record.get("value") is None:
             errors.append(f"PROJECT_TELEMETRY.json observed record {record_id or index} requires value")
-        for evidence_id in record.get("evidence_ids") or []:
-            if evidence_id not in available:
-                errors.append(f"PROJECT_TELEMETRY.json record {record_id or index} references unreachable evidence id: {evidence_id}")
+        evidence_ids = record.get("evidence_ids")
+        if not isinstance(evidence_ids, list):
+            errors.append(f"PROJECT_TELEMETRY.json record {record_id or index} requires evidence_ids array")
+        else:
+            for evidence_id in evidence_ids:
+                if evidence_id not in available:
+                    errors.append(f"PROJECT_TELEMETRY.json record {record_id or index} references unreachable evidence id: {evidence_id}")
     category_counts = {category: categories.count(category) for category in set(categories)}
     if set(categories) != EXPECTED_CATEGORIES or any(count != 1 for count in category_counts.values()):
         missing = sorted(EXPECTED_CATEGORIES - set(categories))

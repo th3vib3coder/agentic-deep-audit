@@ -289,3 +289,40 @@ def test_phase2_artifacts_validate_with_full_audit(tmp_path: Path) -> None:
     validation = validate_audit(audit_dir)
 
     assert validation.ok, validation.errors
+
+
+def test_extract_ci_run_commands_handles_block_scalar_chomp_markers() -> None:
+    # OQ-M08: block-scalar chomp markers (|-, |+, >-) must be treated as block indicators,
+    # not as the literal command, otherwise the entire command block is silently dropped.
+    text = "jobs:\n  build:\n    steps:\n      - run: |-\n          echo hello\n          echo world\n"
+    commands = audit_manifest.extract_ci_run_commands(text, ".github/workflows/ci.yml")
+    rendered = str(commands)
+    assert "echo hello" in rendered and "echo world" in rendered
+
+
+def test_manifest_records_survives_recursionerror(tmp_path: Path, monkeypatch) -> None:
+    # OQ-M09: a RecursionError during manifest parsing must degrade to a skipped record, not
+    # abort the manifest phase (RecursionError is NOT a ValueError subclass, so it was uncaught).
+    def boom(*args: object, **kwargs: object):
+        raise RecursionError("deeply nested manifest")
+
+    monkeypatch.setattr(audit_manifest, "parse_manifest", boom)
+    file_index = {"records": [{"path": "package.json"}]}
+    records = audit_manifest.manifest_records(file_index, {"package.json": "ev-000001"}, tmp_path)
+
+    assert records and records[0]["skipped"] is True
+    assert "RecursionError" in records[0]["skip_reason"]
+
+
+def test_run_manifest_survives_corrupt_file_index(tmp_path: Path) -> None:
+    # OQ-M10: a corrupt/missing FILE_INDEX or EVIDENCE_INDEX must degrade to skipped manifest
+    # artifacts, not abort the manifest phase with an unhandled exception.
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).write_text("{ not valid json", encoding="utf-8")
+
+    audit_manifest.run_manifest({"run_id": "run-1"}, audit_dir)  # must not raise
+
+    manifests = json.loads((audit_dir / ARTIFACT_PATHS["MANIFESTS"]).read_text(encoding="utf-8"))
+    assert manifests["skipped"] is True
+    assert manifests["records"] == []

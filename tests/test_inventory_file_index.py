@@ -100,6 +100,11 @@ def test_inventory_respects_scope_filters_and_hashes(tmp_path: Path) -> None:
     assert ".git/config" not in paths
     assert "node_modules/pkg/index.js" not in paths
     assert "audit/RUN_CONFIG.json" not in paths
+    skipped = {item["path"]: item["reason"] for item in file_index["skipped_paths"]}
+    assert skipped[".git"] == "excluded by .git/**"
+    assert skipped["node_modules"] == "excluded by node_modules/**"
+    assert not any(path.startswith(".git/") for path in skipped)
+    assert not any(path.startswith("node_modules/") for path in skipped)
     assert paths["src/app.py"]["kind"] == "code"
     assert paths["tests/test_app.py"]["kind"] == "test"
     assert paths["README.md"]["kind"] == "docs"
@@ -138,6 +143,35 @@ def test_inventory_skips_symlinks_before_hashing_targets(tmp_path: Path) -> None
     if "linked_dir" in skipped:
         assert skipped["linked_dir"] == "symlink skipped"
     assert sha256_file(outside) not in {record["sha256"] for record in file_index["records"]}
+
+
+def test_scan_files_prunes_symlink_directory_children_without_os_symlink_privilege(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "safe.py").write_text("x = 1\n", encoding="utf-8")
+    linked_dir = repo / "linked_dir"
+    linked_dir.mkdir()
+    (linked_dir / "nested_secret.py").write_text("SECRET = True\n", encoding="utf-8")
+    original_is_symlink = Path.is_symlink
+
+    def fake_is_symlink(path: Path) -> bool:
+        if path == linked_dir:
+            return True
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", fake_is_symlink)
+
+    records, skipped, _ = audit_inventory.scan_files(
+        {
+            "repo": {"path": str(repo)},
+            "scope_filters": {"include": ["**/*"], "exclude": []},
+            "output_dir": "audit",
+        }
+    )
+
+    assert {record["path"] for record in records} == {"safe.py"}
+    assert "linked_dir/nested_secret.py" not in {record["path"] for record in records}
+    assert {item["path"]: item["reason"] for item in skipped}["linked_dir"] == "symlink skipped"
 
 
 def test_scan_files_skips_oversized_files_before_reading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,6 +223,57 @@ def test_scan_files_checks_size_cap_before_reading(tmp_path: Path, monkeypatch: 
     assert "exceeds size cap" in skipped[0]["reason"]
 
 
+def test_scan_files_records_read_errors_without_aborting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "good.py").write_text("x = 1\n", encoding="utf-8")
+    bad = repo / "bad.py"
+    bad.write_text("raise RuntimeError\n", encoding="utf-8")
+    original_read = audit_inventory.read_bytes_capped
+
+    def flaky_read(path: Path, *args: object, **kwargs: object) -> bytes:
+        if path == bad:
+            raise OSError("simulated read failure")
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(audit_inventory, "read_bytes_capped", flaky_read)
+
+    records, skipped, _ = audit_inventory.scan_files(
+        {
+            "repo": {"path": str(repo)},
+            "scope_filters": {"include": ["**/*"], "exclude": []},
+            "output_dir": "audit",
+        }
+    )
+
+    assert {record["path"] for record in records} == {"good.py"}
+    skipped_reasons = {item["path"]: item["reason"] for item in skipped}
+    assert "simulated read failure" in skipped_reasons["bad.py"]
+
+
+def test_inventory_repo_payload_redacts_secret_urls(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# Repo\n", encoding="utf-8")
+    audit_dir = repo / "audit"
+    audit_dir.mkdir()
+
+    audit_inventory.run_inventory(
+        {
+            "run_id": "run-redact",
+            "repo": {"kind": "local", "path": str(repo), "github": "https://ghp_ABCDEFGHIJKLMNOPQRST@github.com/example/private.git"},
+            "scope_filters": {"include": ["**/*"], "exclude": []},
+            "output_dir": str(audit_dir),
+        },
+        audit_dir,
+    )
+
+    text = (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).read_text(encoding="utf-8")
+    payload = json.loads(text)
+    assert "ghp_ABCDEFGHIJKLMNOPQRST" not in text
+    assert payload["repo"]["github"] == "https://github.com/example/private.git"
+
+
 def test_inventory_markdown_derives_counts_and_root_docs(tmp_path: Path) -> None:
     _, audit_dir = run_inventory_fixture(tmp_path)
     file_index = json.loads((audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).read_text(encoding="utf-8"))
@@ -200,8 +285,8 @@ def test_inventory_markdown_derives_counts_and_root_docs(tmp_path: Path) -> None
     assert "| README | found | README.md |" in inventory
     assert "| LICENSE | found | LICENSE |" in inventory
     assert "| SECURITY | missing |  |" in inventory
-    assert "| .git/config | excluded by .git/** |" in inventory
-    assert "| node_modules/pkg/index.js | excluded by node_modules/** |" in inventory
+    assert "| .git | excluded by .git/** |" in inventory
+    assert "| node_modules | excluded by node_modules/** |" in inventory
     assert f"- Binary file count: {counts['binary']}" in inventory
 
 
@@ -283,7 +368,8 @@ def test_inventory_excludes_absolute_nested_output_dir(tmp_path: Path) -> None:
     paths = {record["path"] for record in file_index["records"]}
     assert not any(path.startswith("reports/audit/") for path in paths)
     skipped = {item["path"]: item["reason"] for item in file_index["skipped_paths"]}
-    assert skipped["reports/audit/RUN_CONFIG.json"] == "excluded by reports/audit/**"
+    assert skipped["reports/audit"] == "excluded by reports/audit/**"
+    assert not any(path.startswith("reports/audit/") for path in skipped)
 
 
 def test_inventory_dry_run_reports_evidence_index_and_provenance(tmp_path: Path) -> None:

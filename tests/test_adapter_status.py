@@ -174,6 +174,38 @@ def test_detect_command_hardens_git_version_probe(monkeypatch: pytest.MonkeyPatc
     assert env["GIT_TERMINAL_PROMPT"] == "0"
 
 
+def test_detect_command_scrubs_non_git_version_probe_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    external = tmp_path.parent / f"{tmp_path.name}-bin"
+    external.mkdir()
+    fake = external / "rg.exe"
+    fake.write_text("", encoding="utf-8")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "raw-secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "raw-token")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "99")
+    monkeypatch.setattr("agentic_deep_audit.bootstrap.shutil.which", lambda _tool: str(fake))
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        observed["env"] = kwargs.get("env")
+        observed["encoding"] = kwargs.get("encoding")
+        observed["errors"] = kwargs.get("errors")
+        return subprocess.CompletedProcess(command, 0, stdout="ripgrep 14.1.0\n", stderr="")
+
+    monkeypatch.setattr("agentic_deep_audit.bootstrap.subprocess.run", fake_run)
+
+    status = detect_command("rg", ["--version"], allowed_root=tmp_path)
+
+    assert status["status"] == "detected"
+    env = observed["env"]
+    assert isinstance(env, dict)
+    assert observed["encoding"] == "utf-8"
+    assert observed["errors"] == "replace"
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "GIT_CONFIG_COUNT" not in env
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+
+
 def test_detect_command_timeout_is_recorded_as_skip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     external = tmp_path.parent / f"{tmp_path.name}-bin"
     external.mkdir()
@@ -309,6 +341,8 @@ def test_adapter_run_scrubs_parent_environment(monkeypatch: pytest.MonkeyPatch, 
 
     def fake_run(command, **kwargs):
         observed["env"] = kwargs.get("env")
+        observed["encoding"] = kwargs.get("encoding")
+        observed["errors"] = kwargs.get("errors")
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
     monkeypatch.setattr("agentic_deep_audit.adapters.base.subprocess.run", fake_run)
@@ -317,6 +351,8 @@ def test_adapter_run_scrubs_parent_environment(monkeypatch: pytest.MonkeyPatch, 
 
     env = observed["env"]
     assert isinstance(env, dict)
+    assert observed["encoding"] == "utf-8"
+    assert observed["errors"] == "replace"
     assert "SECRET_TOKEN" not in env
     assert "GIT_CONFIG_COUNT" not in env
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"

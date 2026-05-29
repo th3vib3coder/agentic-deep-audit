@@ -57,3 +57,48 @@ def test_seq_atomicity_checker_fails_missing_refs(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "missing Refs:" in output.read_text(encoding="utf-8")
+
+
+def test_seq_atomicity_checker_fails_plan_file_with_no_steps(tmp_path: Path) -> None:
+    plan_dir = tmp_path / "plan"
+    plan_dir.mkdir()
+    (plan_dir / "001_seq_empty.md").write_text("# Empty\n\nNo structured steps here.\n", encoding="utf-8")
+    output = tmp_path / "audit" / ARTIFACT_PATHS["SEQ_ATOMICITY_REPORT"]
+
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), "--plan-dir", str(plan_dir), "--output", str(output)],
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    report = output.read_text(encoding="utf-8")
+    assert "step `N/A`: no step blocks" in report
+
+
+def test_seq_atomicity_checker_ignores_non_sequence_review_docs(tmp_path: Path) -> None:
+    plan_dir = tmp_path / "plan"
+    plan_dir.mkdir()
+    (plan_dir / "901_internal_review_packet.md").write_text("# Review\n\nNo sequence steps expected here.\n", encoding="utf-8")
+    (plan_dir / "001_seq_good.md").write_text(
+        "# Good\n\n"
+        "- [ ] Step 001.1 - Complete fields.\n"
+        "  - Target: good.\n"
+        "  - Refs: test.\n"
+        "  - Verify: pass.\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / ARTIFACT_PATHS["SEQ_ATOMICITY_REPORT"]
+
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), "--plan-dir", str(plan_dir), "--output", str(output)],
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "901_internal_review_packet.md" not in output.read_text(encoding="utf-8")

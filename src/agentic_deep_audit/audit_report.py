@@ -85,15 +85,24 @@ def read_text(path: Path) -> str:
     return read_text_auto_capped(path, encoding="utf-8", errors="replace", label="report input")
 
 
-def load_optional_json(audit_dir: Path, key: str) -> dict[str, Any]:
+def load_artifact(audit_dir: Path, key: str) -> tuple[dict[str, Any], str]:
+    # OQ-B03 / T8-B11: distinguish MISSING vs CORRUPT vs OK so the report never renders a
+    # confident "0" for an input that was absent or unreadable (which would read as
+    # "codebase empty" when an upstream phase actually failed). Returns (value, status)
+    # with status in {"ok", "missing", "corrupt"}.
     path = audit_dir / ARTIFACT_PATHS[key]
     if not path.exists():
-        return {}
+        return {}, "missing"
     try:
         payload = read_json_capped(path, label="report JSON")
     except (OSError, FileSizeLimitError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+        return {}, "corrupt"
+    return (payload if isinstance(payload, dict) else {}), "ok"
+
+
+def load_optional_json(audit_dir: Path, key: str) -> dict[str, Any]:
+    value, _status = load_artifact(audit_dir, key)
+    return value
 
 
 def count_items(payload: dict[str, Any], *keys: str) -> int:
@@ -102,6 +111,43 @@ def count_items(payload: dict[str, Any], *keys: str) -> int:
         if isinstance(value, list):
             return len(value)
     return 0
+
+
+def count_display(loaded: tuple[dict[str, Any], str], *keys: str) -> str:
+    # Render a count from a load_artifact() result; surface missing/corrupt inputs as
+    # "unknown (<status>)" instead of a misleading 0.
+    value, status = loaded
+    if status != "ok":
+        return f"unknown ({status})"
+    return str(count_items(value, *keys))
+
+
+def group_count_display(loaded: tuple[dict[str, Any], str]) -> str:
+    value, status = loaded
+    if status != "ok":
+        return f"unknown ({status})"
+    return str(len([item for item in value.values() if isinstance(item, list)]))
+
+
+def runtime_phase_count_display(loaded: tuple[dict[str, Any], str]) -> str:
+    value, status = loaded
+    if status != "ok":
+        return f"unknown ({status})"
+    legacy_phases = value.get("phases")
+    if isinstance(legacy_phases, list):
+        return str(len(legacy_phases))
+    phase_durations = value.get("phase_durations_ms")
+    if isinstance(phase_durations, dict):
+        return str(
+            len(
+                [
+                    item
+                    for item in phase_durations.values()
+                    if isinstance(item, int) or (isinstance(item, dict) and "duration_ms" in item)
+                ]
+            )
+        )
+    return "0"
 
 
 def validation_blocker_count(text: str) -> int | None:
@@ -273,15 +319,15 @@ def report_scope_section(audit_dir: Path) -> str:
 
 
 def report_sections(audit_dir: Path) -> dict[str, str]:
-    module_graph = load_optional_json(audit_dir, "MODULE_GRAPH")
-    symbol_index = load_optional_json(audit_dir, "SYMBOL_INDEX")
-    special = load_optional_json(audit_dir, "SPECIAL_IMPLEMENTATIONS")
-    risk = load_optional_json(audit_dir, "RISK_FINDINGS")
-    suspicious = load_optional_json(audit_dir, "SUSPICIOUS_BEHAVIORS")
-    telemetry = load_optional_json(audit_dir, "PROJECT_TELEMETRY")
-    reuse = load_optional_json(audit_dir, "REUSE_CARDS")
-    license_cards = load_optional_json(audit_dir, "LICENSE_CARDS")
-    metrics = load_optional_json(audit_dir, "AUDIT_RUNTIME_METRICS")
+    module_graph = load_artifact(audit_dir, "MODULE_GRAPH")
+    symbol_index = load_artifact(audit_dir, "SYMBOL_INDEX")
+    special = load_artifact(audit_dir, "SPECIAL_IMPLEMENTATIONS")
+    risk = load_artifact(audit_dir, "RISK_FINDINGS")
+    suspicious = load_artifact(audit_dir, "SUSPICIOUS_BEHAVIORS")
+    telemetry = load_artifact(audit_dir, "PROJECT_TELEMETRY")
+    reuse = load_artifact(audit_dir, "REUSE_CARDS")
+    license_cards = load_artifact(audit_dir, "LICENSE_CARDS")
+    metrics = load_artifact(audit_dir, "AUDIT_RUNTIME_METRICS")
     wiki_pages = list((audit_dir / "wiki").rglob("*.md")) if (audit_dir / "wiki").exists() else []
     skipped = skipped_artifacts(audit_dir)
     low_conf = low_confidence_records(audit_dir)
@@ -291,21 +337,21 @@ def report_sections(audit_dir: Path) -> dict[str, str]:
         "GQ01_ARCHITECTURE": "\n".join(
             [
                 f"- Architecture artifacts: `{ARTIFACT_PATHS['ARCHITECTURE']}`, `{ARTIFACT_PATHS['MODULE_GRAPH']}`, `{ARTIFACT_PATHS['SYMBOL_INDEX']}`, `{ARTIFACT_PATHS['GRAPH']}`.",
-                f"- Observed module graph: `{count_items(module_graph, 'nodes')}` nodes and `{count_items(module_graph, 'edges')}` edges.",
-                f"- Observed symbol records: `{count_items(symbol_index, 'symbols')}`.",
+                f"- Observed module graph: `{count_display(module_graph, 'nodes')}` nodes and `{count_display(module_graph, 'edges')}` edges.",
+                f"- Observed symbol records: `{count_display(symbol_index, 'symbols')}`.",
             ]
         ),
         "GQ02_PATTERNS_FEATURES": "\n".join(
             [
                 f"- Pattern and feature artifacts: `{ARTIFACT_PATHS['PATTERNS']}`, `{ARTIFACT_PATHS['FEATURE_CATALOG']}`, `{ARTIFACT_PATHS['SPECIAL_IMPLEMENTATIONS']}`.",
-                f"- Reuse candidate records: `{count_items(special, 'candidates')}`.",
+                f"- Reuse candidate records: `{count_display(special, 'candidates')}`.",
                 "- Low-confidence feature or pattern items remain in open questions instead of being promoted as facts.",
             ]
         ),
         "GQ03_PERFORMANCE": "\n".join(
             [
                 f"- Performance artifacts: `{ARTIFACT_PATHS['PERFORMANCE_REVIEW']}`, `{ARTIFACT_PATHS['QUALITY_REVIEW']}`, `{ARTIFACT_PATHS['PROJECT_TELEMETRY']}`.",
-                f"- Runtime metric phases recorded: `{count_items(metrics, 'phases')}`.",
+                f"- Runtime metric phases recorded: `{runtime_phase_count_display(metrics)}`.",
                 "- Benchmark-backed and static proxy observations are kept distinct.",
             ]
         ),
@@ -319,16 +365,16 @@ def report_sections(audit_dir: Path) -> dict[str, str]:
         "GQ05_REUSE": "\n".join(
             [
                 f"- Reuse artifacts: `{ARTIFACT_PATHS['REUSE_CARDS']}`, `{ARTIFACT_PATHS['REUSE_MAP']}`, `{ARTIFACT_PATHS['LICENSE_CARDS']}`.",
-                f"- Reuse cards: `{count_items(reuse, 'cards')}`.",
-                f"- License cards: `{count_items(license_cards, 'cards')}`.",
+                f"- Reuse cards: `{count_display(reuse, 'cards')}`.",
+                f"- License cards: `{count_display(license_cards, 'cards')}`.",
                 "- Reuse suitability remains conditional on target context and human license review.",
             ]
         ),
         "GQ06_RISK": "\n".join(
             [
                 f"- Risk artifacts: `{ARTIFACT_PATHS['RISK_REPORT']}`, `{ARTIFACT_PATHS['RISK_FINDINGS']}`, `{ARTIFACT_PATHS['SUSPICIOUS_BEHAVIORS']}`.",
-                f"- Promoted risk findings: `{count_items(risk, 'findings')}`.",
-                f"- Suspicious behavior records: `{count_items(suspicious, 'records')}`.",
+                f"- Promoted risk findings: `{count_display(risk, 'findings')}`.",
+                f"- Suspicious behavior records: `{count_display(suspicious, 'behaviors', 'records')}`.",
                 "- The audit cannot claim absence of vulnerabilities; it reports observed signals and limitations.",
             ]
         ),
@@ -350,7 +396,7 @@ def report_sections(audit_dir: Path) -> dict[str, str]:
         "GQ09_MAINTENANCE": "\n".join(
             [
                 f"- Maintenance artifacts: `{ARTIFACT_PATHS['PROJECT_TELEMETRY']}`, `{ARTIFACT_PATHS['PROJECT_TELEMETRY_MD']}`.",
-                f"- Telemetry record groups: `{len([value for value in telemetry.values() if isinstance(value, list)])}`.",
+                f"- Telemetry record groups: `{group_count_display(telemetry)}`.",
                 f"- Tool status counts: `{json.dumps(tool_counts, sort_keys=True)}`.",
             ]
         ),

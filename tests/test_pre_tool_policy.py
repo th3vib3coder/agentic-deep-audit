@@ -26,6 +26,22 @@ def load_pre_tool_policy_module():
     return module
 
 
+def test_audit_dir_from_event_contains_path_within_cwd(tmp_path: Path) -> None:
+    # OQ-M22: the PreToolUse event is untrusted input. A crafted audit_dir must not let the
+    # hook create directories / write the blocked-attempts log to an arbitrary absolute path
+    # (append_blocked_attempt does mkdir(parents=True) + write on whatever Path it is handed).
+    module = load_pre_tool_policy_module()
+    cwd = tmp_path
+    outside = (tmp_path.parent / "m22_evil_outside").resolve()
+
+    contained = module.audit_dir_from_event({"cwd": str(cwd), "tool_input": {"audit_dir": str(outside)}})
+    contained.resolve().relative_to(cwd.resolve())  # raises ValueError if the path escaped cwd
+    assert contained.resolve() != outside
+
+    inside = module.audit_dir_from_event({"cwd": str(cwd), "tool_input": {"audit_dir": "audit"}})
+    inside.resolve().relative_to(cwd.resolve())
+
+
 def test_blocked_command_attempt_fixture_logs_non_empty_attempt(tmp_path: Path) -> None:
     audit_dir = tmp_path / "audit"
     env = os.environ.copy()

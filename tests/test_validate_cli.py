@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import agentic_deep_audit.audit_validate as audit_validate_module
 from agentic_deep_audit.audit_validate import validate_audit
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 
@@ -47,6 +48,22 @@ def test_missing_audit_dir() -> None:
 
     assert result.returncode != 0
     assert "missing audit dir" in result.stderr
+
+
+def test_validate_audit_isolates_phase_validator_exceptions(tmp_path: Path, monkeypatch) -> None:
+    # OQ-M11: a phase validator raising on a malformed artifact must be reported as a blocker,
+    # not abort the whole validation run. Previously only the extension/review-packet validators
+    # were exception-guarded; the 11 phase validators ran bare, so one KeyError aborted everything.
+    audit_dir = build_full_audit(tmp_path)
+
+    def boom(*args: object, **kwargs: object):
+        raise KeyError("simulated malformed artifact")
+
+    monkeypatch.setattr(audit_validate_module, "validate_graph_artifacts", boom)
+    result = validate_audit(audit_dir)
+
+    assert not result.ok
+    assert any("validation_exception" in error and "KeyError" in error for error in result.errors)
 
 
 def test_validate_cli_writes_zero_blocker_report(tmp_path: Path) -> None:

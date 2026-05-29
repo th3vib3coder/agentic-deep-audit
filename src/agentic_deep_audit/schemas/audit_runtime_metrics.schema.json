@@ -10,6 +10,10 @@
     "files_processed",
     "bytes_processed",
     "output_bytes",
+    "cache_hits",
+    "cache_misses",
+    "token_proxy",
+    "memory_peak",
     "tool_failures"
   ],
   "properties": {
@@ -20,25 +24,64 @@
       "type": "string"
     },
     "phase_durations_ms": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 0
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "duration_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "skipped_reason": {
+                "type": "string"
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "duration_ms"
+                ]
+              },
+              {
+                "required": [
+                  "skipped_reason"
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     "files_processed": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 0
     },
     "bytes_processed": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 0
     },
     "output_bytes": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 0
     },
     "cache_hits": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 0
     },
     "cache_misses": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 0
     },
     "tool_failures": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 0
     },
     "notes": {
       "type": "array",
@@ -47,10 +90,79 @@
       }
     },
     "memory_peak": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "skipped",
+            "observed"
+          ]
+        },
+        "skipped_reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "skipped"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "skipped_reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "observed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "value"
+            ]
+          }
+        }
+      ]
     },
     "token_proxy": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes_read",
+        "estimated_tokens",
+        "bytes_sent_to_agent"
+      ],
+      "properties": {
+        "bytes_read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimated_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytes_sent_to_agent": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     }
   }
 }

@@ -14,8 +14,9 @@ from urllib.parse import urlparse, urlunparse
 
 from .audit_evidence import sync_evidence_identity_from_provenance
 from .bootstrap import enrich_tool_status
-from .limits import FileSizeLimitError, read_text_auto_capped
+from .limits import FileSizeLimitError, is_safe_repo_relative_path, read_text_auto_capped
 from .mcp_policy import looks_secret, redact_value
+from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 from .policy import decide_command, decide_network
 
@@ -45,7 +46,7 @@ GIT_SAFE_CONFIG = [
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -209,9 +210,25 @@ def parse_tags(git_dir: Path) -> list[str]:
     tags: set[str] = set()
     tag_root = git_dir / "refs" / "tags"
     if tag_root.exists():
-        for path in tag_root.rglob("*"):
-            if path.is_file():
-                tags.add(path.relative_to(tag_root).as_posix())
+        for dirpath, dirnames, filenames in os.walk(tag_root, topdown=True, followlinks=False):
+            directory = Path(dirpath)
+            dirnames.sort()
+            filenames.sort()
+            for dirname in list(dirnames):
+                try:
+                    if (directory / dirname).is_symlink():
+                        dirnames.remove(dirname)
+                except OSError:
+                    dirnames.remove(dirname)
+            for filename in filenames:
+                path = directory / filename
+                try:
+                    if path.is_symlink():
+                        continue
+                    if path.is_file():
+                        tags.add(path.relative_to(tag_root).as_posix())
+                except OSError:
+                    continue
     packed = git_dir / "packed-refs"
     if packed.exists():
         try:
@@ -247,7 +264,10 @@ def parse_submodules(repo_path: Path) -> list[dict[str, str | None]]:
         if current is not None and "=" in stripped:
             key, value = [part.strip() for part in stripped.split("=", 1)]
             if key in {"path", "url"}:
-                current[key] = str(redact_value(value)) if key == "url" else value
+                if key == "path":
+                    current[key] = value if is_safe_repo_relative_path(value) else None
+                else:
+                    current[key] = redact_remote_url(value)
     return submodules
 
 
@@ -331,7 +351,7 @@ def collect_git_metadata(repo_path: Path) -> dict[str, Any]:
             "commands": [root_record],
             "limitations": [limitation],
         }
-    repo_root = Path(root_probe.stdout.strip()).resolve()
+    repo_root = normalize_git_toplevel_path(root_probe.stdout.strip(), repo_path)
     git_dir = repo_root / ".git"
     commands: list[dict[str, Any]] = []
     commands.append(root_record)
@@ -367,6 +387,18 @@ def collect_git_metadata(repo_path: Path) -> dict[str, Any]:
         "commands": commands,
         "limitations": limitations,
     }
+
+
+def normalize_git_toplevel_path(value: str, fallback: Path) -> Path:
+    text = value.strip()
+    if os.name == "nt":
+        match = re.fullmatch(r"/([A-Za-z])/(.*)", text)
+        if match:
+            return Path(f"{match.group(1).upper()}:/{match.group(2)}").resolve()
+        match = re.fullmatch(r"/cygdrive/([A-Za-z])/(.*)", text)
+        if match:
+            return Path(f"{match.group(1).upper()}:/{match.group(2)}").resolve()
+    return (Path(text) if text else fallback).resolve()
 
 
 def run_provenance(run_config: dict[str, Any], audit_dir: Path) -> None:

@@ -9,8 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from agentic_deep_audit import config as config_module
 from agentic_deep_audit.config import ConfigError, load_config_file, load_yaml_config_text, normalize_run_config, ArgvOverrides
 from agentic_deep_audit.config import load_run_config
+from agentic_deep_audit.cli import planned_artifacts
+from agentic_deep_audit.limits import FileSizeLimitError
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -94,6 +97,22 @@ def test_yaml_fixture_loads_and_target_context_canonicalizes(tmp_path: Path) -> 
     assert normalized["target_context"]["allowed_languages"] == ["python"]
     assert normalized["target_context"]["license_tolerance"] == "permissive-only"
     assert normalized["target_context"]["production_required"] is True
+
+
+def test_load_config_file_uses_capped_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = write_config(tmp_path)
+    calls: list[tuple[Path, str | None]] = []
+
+    def fail_on_read(path: Path, **kwargs: object) -> str:
+        calls.append((path, kwargs.get("label") if isinstance(kwargs.get("label"), str) else None))
+        raise FileSizeLimitError("audit config exceeds size cap: 10 > 1 bytes")
+
+    monkeypatch.setattr(config_module, "read_text_auto_capped", fail_on_read)
+
+    with pytest.raises(ConfigError, match="config read failed: .*audit config exceeds size cap"):
+        load_config_file(config)
+
+    assert calls == [(config, "audit config")]
 
 
 def test_empty_allowed_languages_canonicalizes_to_all_languages(tmp_path: Path) -> None:
@@ -227,7 +246,7 @@ def test_dry_run_reports_planned_work_without_writing_artifacts(tmp_path: Path) 
         assert result.returncode == 0, result.stderr
         payload = json.loads(result.stdout)
         assert payload["dry_run"] is True
-        assert payload["planned_artifacts"]
+        assert payload["planned_artifacts"] == planned_artifacts(command)
         if command == "wiki":
             assert {
                 "wiki/000_home.md",

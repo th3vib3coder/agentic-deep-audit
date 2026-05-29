@@ -10,8 +10,6 @@ from typing import Any
 from .audit_evidence import sha256_range, validate_claims_reach_evidence
 from .audit_validate_common import ValidationResult, load_json
 from .audit_validate_evidence import (
-    is_safe_relative_evidence_path,
-    resolve_evidence_source,
     validate_cross_artifact_evidence_references,
     validate_evidence_provenance_drift,
     validate_provenance_artifact,
@@ -21,7 +19,7 @@ from .validate_claim_language import validate_anti_overclaim_language
 from .validate_json_schema import validate_json_artifact_schemas
 from .bootstrap import PHASES
 from .config import sha256_file
-from .limits import FileSizeLimitError, read_bytes_capped, read_text_auto_capped, sha256_file_capped
+from .limits import FileSizeLimitError, is_safe_repo_relative_path, read_bytes_capped, read_text_auto_capped, resolve_repo_file, sha256_file_capped
 from .audit_inventory import KIND_VALUES
 from .mcp_policy import looks_secret
 from .models import ARTIFACT_PATHS
@@ -229,10 +227,10 @@ def validate_inventory_artifacts(audit_dir: Path) -> ValidationResult:
                 errors.append(f"FILE_INDEX.json record {path or index} missing {key}")
         if kind not in KIND_VALUES:
             errors.append(f"invalid file kind for {path}: {kind}")
-        if not is_safe_relative_evidence_path(path):
+        if not is_safe_repo_relative_path(path):
             errors.append(f"FILE_INDEX.json record has unsafe source path: {path or '<empty>'}")
             continue
-        actual = resolve_evidence_source(repo_path, path)
+        actual = resolve_repo_file(repo_path, path)
         if actual is None:
             errors.append(f"FILE_INDEX.json record has unsafe source path: {path or '<empty>'}")
             continue
@@ -285,10 +283,10 @@ def validate_evidence_index_artifact(audit_dir: Path) -> ValidationResult:
             errors.append(f"EVIDENCE_INDEX.json duplicate evidence id: {evidence_id}")
         seen.add(evidence_id)
         path_value = str(item.get("path") or "")
-        if not is_safe_relative_evidence_path(path_value):
+        if not is_safe_repo_relative_path(path_value):
             errors.append(f"evidence {evidence_id} has unsafe source path: {path_value or '<empty>'}")
             continue
-        source = resolve_evidence_source(repo_path, path_value)
+        source = resolve_repo_file(repo_path, path_value)
         if source is None:
             errors.append(f"evidence {evidence_id} has unsafe source path: {path_value or '<empty>'}")
             continue
@@ -501,37 +499,43 @@ def validate_observed_command(command: Any, location: str, errors: list[str]) ->
 
 
 def validate_audit(audit_dir: Path) -> ValidationResult:
-    phase0 = validate_phase0(audit_dir)
-    errors = list(phase0.errors)
-    validate_declared_phase_artifacts(audit_dir, errors)
+    errors: list[str] = []
+
+    def _guard(label: str, run) -> None:
+        # OQ-M11: a phase validator raising (e.g. on a malformed artifact) must be recorded as a
+        # blocker, never abort the whole validation run. Mirrors the extension/review-packet guards.
+        try:
+            run()
+        except Exception as exc:  # noqa: BLE001 - validation surfaces blockers; it does not crash.
+            errors.append(f"validation_exception: {label}: {type(exc).__name__}: {exc}")
+
+    _guard("phase0", lambda: errors.extend(validate_phase0(audit_dir).errors))
+    _guard("declared_phase_artifacts", lambda: validate_declared_phase_artifacts(audit_dir, errors))
     if audit_dir.exists():
-        errors.extend(validate_json_artifact_schemas(audit_dir))
+        _guard("json_schemas", lambda: errors.extend(validate_json_artifact_schemas(audit_dir)))
     if (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).exists():
-        phase1 = validate_inventory_artifacts(audit_dir)
-        errors.extend(phase1.errors)
+        _guard("inventory", lambda: errors.extend(validate_inventory_artifacts(audit_dir).errors))
     if (audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]).exists():
-        evidence = validate_evidence_index_artifact(audit_dir)
-        errors.extend(evidence.errors)
-        evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"], errors)
-        if evidence_index is not None:
-            errors.extend(validate_cross_artifact_evidence_references(audit_dir, evidence_index))
+        def _evidence() -> None:
+            errors.extend(validate_evidence_index_artifact(audit_dir).errors)
+            evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"], errors)
+            if evidence_index is not None:
+                errors.extend(validate_cross_artifact_evidence_references(audit_dir, evidence_index))
+        _guard("evidence_index", _evidence)
     if (audit_dir / ARTIFACT_PATHS["PROVENANCE"]).exists():
-        provenance = validate_provenance_artifact(audit_dir)
-        errors.extend(provenance.errors)
+        _guard("provenance", lambda: errors.extend(validate_provenance_artifact(audit_dir).errors))
     if (audit_dir / ARTIFACT_PATHS["MANIFESTS"]).exists() or (audit_dir / ARTIFACT_PATHS["CI_MAP"]).exists():
-        manifests = validate_manifest_artifacts(audit_dir)
-        errors.extend(manifests.errors)
+        _guard("manifests", lambda: errors.extend(validate_manifest_artifacts(audit_dir).errors))
     if (audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"]).exists() or (audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"]).exists():
-        graph = validate_graph_artifacts(audit_dir)
-        errors.extend(graph.errors)
+        _guard("graph", lambda: errors.extend(validate_graph_artifacts(audit_dir).errors))
     if any((audit_dir / ARTIFACT_PATHS[key]).exists() for key in ["API_SURFACE", "CLI_SURFACE", "MCP_SURFACE", "CONFIG_SURFACE"]):
-        surfaces = validate_surface_artifacts(audit_dir)
-        errors.extend(surfaces.errors)
+        _guard("surfaces", lambda: errors.extend(validate_surface_artifacts(audit_dir).errors))
     if any((audit_dir / ARTIFACT_PATHS[key]).exists() for key in ["FEATURE_CATALOG", "PATTERNS", "SPECIAL_IMPLEMENTATIONS"]):
-        evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"], errors)
-        if evidence_index is not None:
-            synthesis = validate_synthesis_artifacts(audit_dir, evidence_index)
-            errors.extend(synthesis.errors)
+        def _synthesis() -> None:
+            evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"], errors)
+            if evidence_index is not None:
+                errors.extend(validate_synthesis_artifacts(audit_dir, evidence_index).errors)
+        _guard("synthesis", _synthesis)
     if extension_artifacts_present(audit_dir):
         evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"], errors)
         if evidence_index is not None:
@@ -545,5 +549,5 @@ def validate_audit(audit_dir: Path) -> ValidationResult:
         validate_review_packet(audit_dir, errors)
     except Exception as exc:  # noqa: BLE001 - report packet checks must fail as validation blockers.
         errors.append(f"validation_exception: {type(exc).__name__}: {exc}")
-    errors.extend(validate_anti_overclaim_language(audit_dir))
+    _guard("anti_overclaim", lambda: errors.extend(validate_anti_overclaim_language(audit_dir)))
     return ValidationResult(ok=not errors, errors=errors)

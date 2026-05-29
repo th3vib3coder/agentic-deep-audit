@@ -15,6 +15,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .audit_provenance import run_git_command
 from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
+from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 from .policy import decide_network
 
@@ -73,7 +74,7 @@ IDENTITY_SALT = "agentic-deep-audit-telemetry-v1"
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def load_json(path: Path) -> dict[str, Any]:

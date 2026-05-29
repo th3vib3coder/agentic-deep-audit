@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .adapters.base import AdapterStatus, append_tool_status
+from .artifact_io import write_json_artifact
 from .config import DEFAULT_RRF, sha256_file
 from .limits import FileSizeLimitError, is_safe_repo_relative_path, read_json_capped, read_text_auto_capped, resolve_repo_file
 from .mcp_policy import SECRET_PATTERNS, looks_secret, redact_value
@@ -34,7 +35,7 @@ MAX_TEXT_FILE_BODY_BYTES = 1_000_000
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -137,9 +138,6 @@ def create_schema(connection: sqlite3.Connection) -> None:
             evidence_ids UNINDEXED,
             tokenize='unicode61'
         );
-        CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
-        CREATE INDEX IF NOT EXISTS idx_graph_nodes_label ON graph_nodes(label);
-        CREATE INDEX IF NOT EXISTS idx_files_kind_path ON files(kind, path);
         """
     )
 

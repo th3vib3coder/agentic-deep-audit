@@ -11,10 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
-from jsonschema import Draft202012Validator
-
-from .limits import read_text_auto_capped
+from .artifact_io import write_json_artifact
+from .limits import FileSizeLimitError, read_text_auto_capped
 from .models import ARTIFACT_PATHS, RUN_CONFIG, load_schema_registry
 
 
@@ -83,13 +81,16 @@ class ArgvOverrides:
 def load_config_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise ConfigError(f"config file not found: {path}")
-    text = path.read_text(encoding="utf-8-sig")
+    try:
+        text = read_text_auto_capped(path, encoding="utf-8-sig", label="audit config")
+    except FileSizeLimitError as exc:
+        raise ConfigError(f"config read failed: {path}: {exc}") from exc
     try:
         if path.suffix.lower() == ".json":
             data = json.loads(text)
         else:
             data = load_yaml_config_text(text)
-    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+    except (json.JSONDecodeError, ConfigError) as exc:
         raise ConfigError(f"config parse failed: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError("config root must be an object")
@@ -171,7 +172,12 @@ def escape_unescaped_backslashes(value: str) -> str:
 
 def load_yaml_config_text(text: str) -> dict[str, Any]:
     prepared = _escape_windows_backslashes_in_double_quoted_scalars(text)
-    data = yaml.safe_load(prepared) or {}
+    try:
+        import yaml
+
+        data = yaml.safe_load(prepared) or {}
+    except Exception as exc:  # noqa: BLE001 - keep optional YAML dependency lazy while preserving parse context.
+        raise ConfigError(str(exc)) from exc
     if not isinstance(data, dict):
         raise ConfigError("config root must be an object")
     return data
@@ -262,6 +268,8 @@ def canonicalize_retrieval(value: Any) -> dict[str, Any]:
 
 def validate_audit_config_document(config: dict[str, Any]) -> None:
     schema = load_schema_registry()["audit_config"].schema
+    from jsonschema import Draft202012Validator
+
     validator = Draft202012Validator(schema)
     errors = sorted(validator.iter_errors(config), key=lambda item: list(item.path))
     if errors:
@@ -514,5 +522,5 @@ def write_run_config(run_config: dict[str, Any]) -> Path:
     output_dir = Path(str(run_config["output_dir"]))
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / RUN_CONFIG
-    path.write_text(json.dumps(run_config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, run_config)
     return path

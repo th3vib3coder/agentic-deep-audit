@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any
 
 from .audit_canonical_graph import run_canonical_graph_outputs
-from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
+from .artifact_io import write_json_artifact
+from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped, resolve_repo_existing_file
 from .models import ARTIFACT_PATHS
 from .sanitize import clean_markdown_text, markdown_table_cell
 
@@ -38,7 +39,7 @@ def atomic_write_text(path: Path, text: str) -> None:
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    write_json_artifact(path, payload, atomic=True)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -303,27 +304,9 @@ def build_special_implementations(audit_dir: Path, symbol_index: dict[str, Any],
     write_json(audit_dir / ARTIFACT_PATHS["SPECIAL_IMPLEMENTATIONS"], {"schema_version": "1.0", "run_id": load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).get("run_id"), "candidates": candidates, "skipped": not candidates, "skip_reason": None if candidates else "no evidence-backed reusable component candidates"})
 
 
-def resolve_repo_relative_file(repo_path: Path, path_value: str) -> Path | None:
-    if not path_value or "\\" in path_value or ":" in path_value or "\x00" in path_value:
-        return None
-    posix = PurePosixPath(path_value)
-    windows = PureWindowsPath(path_value)
-    if posix.is_absolute() or windows.is_absolute() or windows.drive or windows.root:
-        return None
-    if ".." in posix.parts or ".." in windows.parts:
-        return None
-    root = repo_path.resolve()
-    candidate = (root / path_value).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        return None
-    return candidate if candidate.is_file() else None
-
-
 def changelog_has_decision_marker(repo_path: Path, path_value: str) -> bool:
     try:
-        source = resolve_repo_relative_file(repo_path, path_value)
+        source = resolve_repo_existing_file(repo_path, path_value)
         if source is None:
             return False
         text = read_text_auto_capped(source, encoding="utf-8", errors="replace", max_bytes=MAX_DECISION_DOC_BYTES, label="decision document")
@@ -338,7 +321,7 @@ def decision_doc_questions(audit_dir: Path) -> list[str]:
     records = [
         str(record.get("path_normalized") or record.get("path") or "")
         for record in file_index.get("records", [])
-        if isinstance(record, dict) and resolve_repo_relative_file(repo_path, str(record.get("path_normalized") or record.get("path") or "")) is not None
+        if isinstance(record, dict) and resolve_repo_existing_file(repo_path, str(record.get("path_normalized") or record.get("path") or "")) is not None
     ]
     decision_paths = [
         path

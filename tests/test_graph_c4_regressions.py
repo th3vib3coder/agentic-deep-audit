@@ -189,8 +189,26 @@ def test_tesla01_validator_accepts_windows_symbol_path_edge(tmp_path: Path) -> N
     # set must do the same or it falsely reports the symbol->module edge as missing.
     audit_dir = tmp_path / "audit"
     audit_dir.mkdir()
-    module_graph = {"schema_version": "1.0", "nodes": [{"id": "module:src/foo.py", "type": "module", "path": "src/foo.py", "evidence_ids": []}], "edges": []}
-    symbol_index = {"schema_version": "1.0", "symbols": [{"symbol_id": "symbol:src/foo.py:bar:1", "name": "bar", "path": "src\\foo.py", "evidence_ids": []}]}
+    module_graph = {
+        "schema_version": "1.0",
+        "nodes": [{"id": "module:src/foo.py", "type": "module", "path": "src/foo.py", "evidence_ids": []}],
+        "edges": [],
+        "coverage": {},
+    }
+    symbol_index = {
+        "schema_version": "1.0",
+        "symbols": [
+            {
+                "symbol_id": "symbol:src/foo.py:bar:1",
+                "name": "bar",
+                "kind": "function",
+                "path": "src\\foo.py",
+                "span": {"start_line": 1, "end_line": 1, "start_byte": 0, "end_byte": 0},
+                "public": True,
+                "evidence_ids": [],
+            }
+        ],
+    }
     graph = acg.build_canonical_graph(audit_dir, {"repo": {}}, module_graph, symbol_index)
     acg.write_derived_exports(audit_dir, graph)
     acg.write_json(audit_dir / ARTIFACT_PATHS["MODULE_GRAPH"], module_graph)

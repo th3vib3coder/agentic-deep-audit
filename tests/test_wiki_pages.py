@@ -84,6 +84,32 @@ def test_wiki_templates_match_required_frontmatter_contract() -> None:
         assert REQUIRED_FRONTMATTER <= set(frontmatter)
 
 
+def test_wiki_frontmatter_parser_preserves_colons_inside_values(tmp_path: Path) -> None:
+    text = "\n".join(
+        [
+            "---",
+            'title: "Repository"',
+            'type: "repo_summary"',
+            'repo: "https://github.com/example/project"',
+            'commit: "abc:def"',
+            'slug: "repo"',
+            'tags: ["agentic-audit"]',
+            'source_artifacts: ["PROVENANCE.json"]',
+            "evidence_ids: []",
+            'status: "observed"',
+            "---",
+            "",
+        ]
+    )
+    errors: list[str] = []
+
+    frontmatter = parse_frontmatter(tmp_path / "page.md", text, errors)
+
+    assert not errors
+    assert frontmatter["repo"] == "https://github.com/example/project"
+    assert frontmatter["commit"] == "abc:def"
+
+
 def test_wiki_page_escapes_untrusted_markdown_fragments(tmp_path: Path) -> None:
     audit_dir = tmp_path / "audit"
     audit_dir.mkdir()

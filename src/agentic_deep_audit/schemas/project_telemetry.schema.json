@@ -15,6 +15,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "telemetry_id",
           "category",
@@ -46,7 +47,8 @@
         ],
         "properties": {
           "telemetry_id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^tel-[0-9]{6}$"
           },
           "category": {
             "enum": [
@@ -85,6 +87,7 @@
           },
           "evidence_ids": {
             "type": "array",
+            "uniqueItems": true,
             "items": {
               "type": "string",
               "pattern": "^ev-[0-9]{6,}$"
@@ -102,6 +105,7 @@
           },
           "limitations": {
             "type": "array",
+            "uniqueItems": true,
             "items": {
               "type": "string"
             }

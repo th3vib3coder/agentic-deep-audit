@@ -306,6 +306,18 @@ def classify_payload_contains_source(payload: str | bytes | None) -> bool:
     return any(re.search(marker, text, re.IGNORECASE | re.DOTALL) for marker in source_markers)
 
 
+def matching_redaction_rule(payload: str | bytes | None, rules: list[object]) -> str | None:
+    if payload is None:
+        return None
+    text = payload.decode("utf-8", errors="ignore") if isinstance(payload, bytes) else str(payload)
+    lowered = text.lower()
+    for rule in rules:
+        token = str(rule).strip().lower()
+        if token and token in lowered:
+            return token
+    return None
+
+
 def decide_network(target: str, payload: str | bytes | None = None, policy: dict | None = None) -> NetworkDecision:
     if policy is None:
         return NetworkDecision("block", _host_from_url_or_domain(target), "missing_policy", "network policy snapshot is required")
@@ -316,6 +328,10 @@ def decide_network(target: str, payload: str | bytes | None = None, policy: dict
         return NetworkDecision("block", domain, "default_not_deny", "network policy must default deny")
     if policy.get("send_source_code") is False and classify_payload_contains_source(payload):
         return NetworkDecision("block", domain, "send_source_code_false", "source-like payload blocked")
+    redaction_rules = list(policy.get("redaction_rules") or [])
+    redaction_rule = matching_redaction_rule(target, redaction_rules) or matching_redaction_rule(payload, redaction_rules)
+    if redaction_rule is not None:
+        return NetworkDecision("block", domain, f"redaction_rule:{redaction_rule}", "network target or payload matched redaction rule")
     matches: list[tuple[str, str]] = []
     for denied in policy.get("denied_domains", []):
         if _matches_domain(denied, domain):

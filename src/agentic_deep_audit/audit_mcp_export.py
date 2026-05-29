@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters.base import AdapterStatus, append_tool_status
+from .artifact_io import write_json_artifact
 from .limits import FileSizeLimitError, read_json_capped
 from .mcp_collision_check import GENERATED_SERVER_NAME, GENERATED_TOOL_NAMES, read_host_mcp_state
 from .mcp_policy import redact_value
@@ -36,7 +37,7 @@ def load_required_json(path: Path, label: str) -> tuple[dict[str, Any] | None, s
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def remove_mcp_outputs(audit_dir: Path) -> None:

@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .adapters.base import AdapterStatus, append_tool_status
+from .adapters.base import AdapterStatus, adapter_subprocess_env, append_tool_status
 from .adapters.loader import AdapterBlockedPrePromotion, validate_adapter_promotion
 from .limits import FileSizeLimitError, read_json_capped
 from .models import ARTIFACT_PATHS, PLUGIN_ROOT
@@ -319,7 +319,7 @@ def write_graphify_outputs(audit_dir: Path, graph: dict[str, Any], run_config: d
     graphify_path.parent.mkdir(parents=True, exist_ok=True)
     canonical_before = canonical_path.read_bytes()
     started = time.monotonic()
-    completed = subprocess.run(command, cwd=audit_dir, text=True, capture_output=True, check=False, timeout=30)
+    completed = subprocess.run(command, cwd=audit_dir, env=adapter_subprocess_env(), text=True, encoding="utf-8", errors="replace", capture_output=True, check=False, timeout=30)
     duration_ms = int((time.monotonic() - started) * 1000)
     try:
         canonical_after = canonical_path.read_bytes()

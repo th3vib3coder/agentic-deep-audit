@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..artifact_io import write_json_artifact
 from ..limits import read_json_capped
 from ..mcp_policy import looks_secret, redact_value
 from ..models import ARTIFACT_PATHS
@@ -85,7 +86,7 @@ def append_tool_status(audit_dir: Path, status: AdapterStatus | dict[str, Any]) 
     payload = read_json_capped(path, label="tool status") if path.exists() else {"schema_version": "1.0", "tools": []}
     record = status.to_tool_status_record() if isinstance(status, AdapterStatus) else status
     payload.setdefault("tools", []).append(record)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def resolve_contained_path(root: Path, candidate: Path) -> Path:
@@ -182,7 +183,7 @@ def run_adapter_command(
         return status
     start = time.monotonic()
     try:
-        completed = subprocess.run(command, cwd=safe_cwd, env=adapter_subprocess_env(), text=True, capture_output=True, check=False, timeout=timeout_seconds)
+        completed = subprocess.run(command, cwd=safe_cwd, env=adapter_subprocess_env(), text=True, encoding="utf-8", errors="replace", capture_output=True, check=False, timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         status = AdapterStatus(
             tool=adapter.adapter_id,

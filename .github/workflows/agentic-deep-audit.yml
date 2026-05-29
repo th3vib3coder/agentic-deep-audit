@@ -30,6 +30,24 @@ jobs:
           PYTHONPATH: src
         run: pytest tests -q
 
+      - name: Git-dependent coverage must not skip
+        env:
+          PYTHONPATH: src
+        run: |
+          set -o pipefail
+          git --version
+          mkdir -p audit
+          pytest \
+            tests/test_provenance_git_github.py::test_git_provenance_uses_allowlisted_commands_and_redacts_remote \
+            tests/test_provenance_git_github.py::test_github_metadata_status_skipped_without_network_and_no_secret_leak \
+            tests/test_provenance_git_github.py::test_provenance_validator_rejects_empty_commit_without_limitation \
+            tests/test_provenance_git_github.py::test_git_detected_from_subdirectory_repo_path \
+            tests/test_provenance_git_github.py::test_network_policy_deny_all_skips_github_metadata \
+            tests/test_project_telemetry.py::test_git_telemetry_changelog_identity_and_manifest_caveats \
+            tests/test_evidence_byte_ranges.py::test_git_provenance_commit_is_synced_to_evidence_index \
+            -q -rs | tee audit/git-dependent-pytest.log
+          ! grep -q '^SKIPPED' audit/git-dependent-pytest.log
+
       - name: Smoke audits
         env:
           PYTHONPATH: src

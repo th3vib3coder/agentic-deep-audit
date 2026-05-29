@@ -21,6 +21,7 @@
     },
     "evidence": {
       "type": "array",
+      "uniqueItems": true,
       "items": {
         "type": "object",
         "required": [

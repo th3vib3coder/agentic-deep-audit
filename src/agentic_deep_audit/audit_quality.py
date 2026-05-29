@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .artifact_io import write_json_artifact
 from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 from .sanitize import markdown_table_cell, sanitize_markdown
@@ -32,7 +33,7 @@ def atomic_write_text(path: Path, text: str) -> None:
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    write_json_artifact(path, payload, atomic=True)
 
 
 def load_json(path: Path) -> dict[str, Any]:

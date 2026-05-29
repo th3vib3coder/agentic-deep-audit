@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .limits import MAX_AUDIT_FILE_BYTES, FileSizeLimitError, decode_text_bytes, read_bytes_capped, read_text_auto_capped, resolve_repo_file
+from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 
 
@@ -187,4 +188,4 @@ def validate_claims_reach_evidence(claims: Iterable[dict[str, Any]], evidence_in
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)

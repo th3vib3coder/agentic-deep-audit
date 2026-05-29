@@ -17,6 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility.
 from defusedxml import ElementTree as DefusedET
 from defusedxml.common import DefusedXmlException
 
+from .artifact_io import write_json_artifact
 from .limits import FileSizeLimitError, MAX_MANIFEST_FILE_BYTES, read_json_capped, read_text_capped
 from .models import ARTIFACT_PATHS
 from .policy import command_tokens_from_text, decide_command
@@ -53,7 +54,7 @@ class ObservedCommand:
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -275,7 +276,7 @@ def manifest_records(file_index: dict[str, Any], evidence_lookup: dict[str, str]
             continue
         try:
             parsed = parse_manifest(repo_path / path_value)
-        except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError, tomllib.TOMLDecodeError, ET.ParseError, DefusedXmlException, FileSizeLimitError) as exc:
+        except (OSError, ValueError, TypeError, AttributeError, RecursionError, json.JSONDecodeError, tomllib.TOMLDecodeError, ET.ParseError, DefusedXmlException, FileSizeLimitError) as exc:
             records.append(
                 {
                     "path": path_value,
@@ -307,7 +308,7 @@ def extract_ci_run_commands(text: str, path_value: str) -> list[dict[str, Any]]:
             continue
         indent = len(match.group("indent") if match.group("indent") is not None else match.group("indent2") or "")
         value = (match.group("value") if match.group("value") is not None else match.group("value2") or "").strip()
-        if value in {"|", ">"}:
+        if re.fullmatch(r"[|>][+-]?", value):  # OQ-M08: covers block-scalar chomp markers |- |+ >- >+, not just bare | >
             index += 1
             block: list[str] = []
             while index < len(lines):
@@ -396,9 +397,26 @@ def build_test_map_markdown(manifests: list[dict[str, Any]], ci: list[dict[str, 
 
 
 def run_manifest(run_config: dict[str, Any], audit_dir: Path) -> None:
-    file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"])
+    try:
+        file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"])
+        evidence_lookup = evidence_by_path(audit_dir)
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError, json.JSONDecodeError, FileSizeLimitError) as exc:
+        # OQ-M10: a missing/corrupt FILE_INDEX or EVIDENCE_INDEX must degrade to skipped manifest
+        # artifacts, not abort the manifest phase with an unhandled exception.
+        degraded = {
+            "schema_version": "1.0",
+            "run_id": run_config.get("run_id"),
+            "repo": run_config.get("repo") or {},
+            "source_artifacts": [ARTIFACT_PATHS["FILE_INDEX"], ARTIFACT_PATHS["EVIDENCE_INDEX"]],
+            "skipped": True,
+            "skip_reason": f"manifest inputs unavailable: {type(exc).__name__}: {exc}",
+            "records": [],
+        }
+        write_json(audit_dir / ARTIFACT_PATHS["MANIFESTS"], degraded)
+        write_json(audit_dir / ARTIFACT_PATHS["CI_MAP"], degraded)
+        (audit_dir / ARTIFACT_PATHS["BUILD_TEST_MAP"]).write_text(build_test_map_markdown([], []), encoding="utf-8")
+        return
     repo_path = Path(str((file_index.get("repo") or {}).get("path") or (run_config.get("repo") or {}).get("path") or ".")).resolve()
-    evidence_lookup = evidence_by_path(audit_dir)
     manifests = manifest_records(file_index, evidence_lookup, repo_path)
     ci = ci_records(file_index, evidence_lookup, repo_path)
     common = {

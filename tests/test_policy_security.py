@@ -17,6 +17,9 @@ from agentic_deep_audit.validate_json_schema import validate_json_artifact_schem
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PLUGIN_ROOT / "src"
+ROOT_POLICY_DIR = REPO_ROOT / "policies"
+PACKAGE_POLICY_DIR = REPO_ROOT / "src" / "agentic_deep_audit" / "policies"
+EXPECTED_POLICY_FILES = {"BLOCKED_COMMANDS_ALLOWLIST.json", "DEFAULT_NETWORK_POLICY.json"}
 
 
 def test_blocked_commands_policy_schema_and_required_tools() -> None:
@@ -27,6 +30,18 @@ def test_blocked_commands_policy_schema_and_required_tools() -> None:
 
     assert {"git", "rg", "python"} <= commands
     assert any("-m agentic_deep_audit" in " ".join(item["subcommands"]) for item in policy["allowed"])
+
+
+def test_root_and_package_policy_copies_are_identical() -> None:
+    root_policies = {path.name for path in ROOT_POLICY_DIR.glob("*.json")}
+    package_policies = {path.name for path in PACKAGE_POLICY_DIR.glob("*.json")}
+
+    assert ROOT_POLICY_DIR.is_dir()
+    assert PACKAGE_POLICY_DIR.is_dir()
+    assert root_policies == EXPECTED_POLICY_FILES
+    assert root_policies == package_policies
+    for policy_name in sorted(root_policies):
+        assert (ROOT_POLICY_DIR / policy_name).read_bytes() == (PACKAGE_POLICY_DIR / policy_name).read_bytes(), policy_name
 
 
 def test_default_network_policy_blocks_without_explicit_snapshot() -> None:
@@ -86,6 +101,13 @@ def test_command_allowlist_uses_token_exact_matching() -> None:
     assert not decide_command(["docker-compose", "up"], origin="plugin_allowlist").allowed
 
 
+def test_shell_aliases_are_explicitly_blocked_always() -> None:
+    for shell in ["sh", "bash", "dash", "zsh", "fish", "ksh", "powershell", "pwsh", "cmd"]:
+        decision = decide_command([shell, "-c", "echo unsafe"], origin="plugin_allowlist")
+        assert decision.decision == "block"
+        assert decision.policy_rule == "blocked_always"
+
+
 def test_pre_tool_policy_wrapper_logs_blocked_command(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(SRC_ROOT)
@@ -110,7 +132,7 @@ def test_network_precedence_and_source_payload_blocking() -> None:
         "default": "deny",
         "allowed_domains": ["api.github.com", "*.example.com"],
         "denied_domains": ["*", "blocked.example.com"],
-        "redaction_rules": ["token"],
+        "redaction_rules": ["token", "cookie"],
         "send_source_code": False,
         "send_dependency_names": True,
     }
@@ -123,6 +145,9 @@ def test_network_precedence_and_source_payload_blocking() -> None:
     assert decide_network("api.github.com", payload="const x = 1", policy=policy).policy_rule == "send_source_code_false"
     assert decide_network("api.github.com", payload="package main\nfunc main() {}", policy=policy).policy_rule == "send_source_code_false"
     assert decide_network("api.github.com", payload="SELECT * FROM users", policy=policy).policy_rule == "send_source_code_false"
+    assert decide_network("api.github.com", payload="access_token=secret", policy=policy).policy_rule == "redaction_rule:token"
+    assert decide_network("api.github.com", payload=b"Cookie: session=abc", policy=policy).policy_rule == "redaction_rule:cookie"
+    assert decide_network("https://api.github.com/repos?access_token=secret", policy=policy).policy_rule == "redaction_rule:token"
     assert decide_network("https://attacker.com@api.github.com/path", policy=policy).policy_rule == "userinfo_not_allowed"
     assert decide_network("ftp://api.github.com/data", policy=policy).policy_rule == "unsupported_scheme"
     assert decide_network("https://[::1", policy=policy).policy_rule == "invalid_url"

@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .limits import FileSizeLimitError, read_bytes_capped, read_json_capped, read_text_auto_capped, resolve_repo_file
+from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 
 
@@ -23,7 +24,7 @@ ARCHIVE_EXTENSIONS = {".zip", ".tar", ".gz", ".tgz", ".whl"}
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_artifact(path, payload)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -145,6 +146,16 @@ def root_license(file_index: dict[str, Any], repo_path: Path, evidence_lookup: d
                     "evidence_id": evidence_lookup.get(path_value),
                 }
             )
+        else:
+            # N2: a readable LICENSE file that cannot be classified must still be surfaced
+            # (otherwise it vanishes from license_file_detections and the summary hides it).
+            skipped.append(
+                {
+                    "path": path_value,
+                    "scope": "root" if path_depth(path_value) == 1 else "subtree_root",
+                    "skipped_reason": "license text unclassifiable: unknown token",
+                }
+            )
     selected = next((item for item in detections if item["scope"] == "root"), detections[0] if detections else None)
     license_file_detections = detections + skipped
     if selected:
@@ -255,6 +266,8 @@ def license_cards(run_config: dict[str, Any], audit_dir: Path, file_index: dict[
         "root_confidence": root_confidence,
         "license_file_detections": license_file_detections,
         "incompatible_license_files": incompatible_license_files,
+        "license_files_differing_from_root": incompatible_license_files,
+        "root_license_conflict_basis": "declared_license_differs_from_selected_root_license",
         "root_license_conflict_count": len(incompatible_license_files),
         "file_denominator": len(denominator_cards),
         "file_license_known": len(known),
