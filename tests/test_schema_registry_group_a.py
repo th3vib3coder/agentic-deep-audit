@@ -7,6 +7,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
+from agentic_deep_audit import validate_extensions
 from agentic_deep_audit.validate_json_schema import SCHEMA_BY_ARTIFACT_KEY, SCHEMA_EXEMPT_ARTIFACT_KEYS
 from agentic_deep_audit.models import ARTIFACT_PATHS
 
@@ -103,6 +104,70 @@ def test_high_trust_phase1_artifacts_are_schema_mapped_not_exempt() -> None:
     assert_invalid(schema("file_index.schema.json"), {"schema_version": "1.0", "repo": {}, "records": [{"path": "a.py"}]})
     assert_invalid(schema("provenance.schema.json"), {"schema_version": "1.0", "git": "not-an-object"})
     assert_invalid(schema("manifests.schema.json"), {"schema_version": "1.0", "records": [{"path": "package.json", "skipped": False, "skip_reason": None}]})
+
+
+def test_semantic_validator_json_artifacts_are_schema_backed() -> None:
+    """Keep the schema/hand-validator contract explicit when new domains are added."""
+
+    extension_groups = [
+        validate_extensions.SCIENTIFIC_KEYS,
+        validate_extensions.TELEMETRY_KEYS,
+        validate_extensions.RISK_KEYS,
+        validate_extensions.LICENSE_BINARY_KEYS,
+        validate_extensions.PERFORMANCE_QUALITY_KEYS,
+        validate_extensions.REUSE_KEYS,
+        validate_extensions.WIKI_KEYS,
+        validate_extensions.GRAPH_KEYS,
+        validate_extensions.CORPUS_KEYS,
+        validate_extensions.MCP_EXPORT_KEYS,
+        validate_extensions.REPORT_KEYS,
+    ]
+    semantic_json_keys = {
+        key
+        for group in extension_groups
+        for key in group
+        if ARTIFACT_PATHS[key].endswith(".json")
+    }
+    expected_extension_schema_keys = {
+        "SCIENTIFIC_PROVENANCE",
+        "PROJECT_TELEMETRY",
+        "SUSPICIOUS_BEHAVIORS",
+        "RISK_FINDINGS",
+        "AGENTIC_SECURITY_FINDINGS",
+        "LICENSE_CARDS",
+        "BINARY_ARTIFACTS",
+        "AUDIT_RUNTIME_METRICS",
+        "REUSE_CARDS",
+        "GRAPH",
+        "CORPUS_INDEX",
+        "MCP_CONFIG",
+    }
+    legacy_semantic_exemptions = {
+        "SBOM",
+        "GRAPH_NODES",
+        "GRAPH_EDGES",
+        "GRAPHIFY_GRAPH",
+    }
+    core_semantic_schema_keys = {
+        "FILE_INDEX",
+        "PROVENANCE",
+        "MANIFESTS",
+        "EVIDENCE_INDEX",
+        "MODULE_GRAPH",
+        "SYMBOL_INDEX",
+        "CALL_GRAPH",
+        "API_SURFACE",
+        "CLI_SURFACE",
+        "MCP_SURFACE",
+        "CONFIG_SURFACE",
+        "SPECIAL_IMPLEMENTATIONS",
+    }
+
+    assert semantic_json_keys == expected_extension_schema_keys | legacy_semantic_exemptions
+    assert expected_extension_schema_keys <= set(SCHEMA_BY_ARTIFACT_KEY)
+    assert legacy_semantic_exemptions <= SCHEMA_EXEMPT_ARTIFACT_KEYS
+    assert core_semantic_schema_keys <= set(SCHEMA_BY_ARTIFACT_KEY)
+    assert (expected_extension_schema_keys | core_semantic_schema_keys).isdisjoint(SCHEMA_EXEMPT_ARTIFACT_KEYS)
 
 
 def test_audit_config_valid_and_invalid_samples() -> None:
