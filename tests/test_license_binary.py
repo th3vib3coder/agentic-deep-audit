@@ -266,6 +266,25 @@ def test_root_license_reports_nested_incompatible_license(tmp_path: Path) -> Non
     assert summary["root_license_conflict_basis"] == "declared_license_differs_from_selected_root_license"
 
 
+def test_nested_license_is_not_promoted_to_root_when_root_missing(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    nested = repo / "vendor" / "lib"
+    nested.mkdir(parents=True)
+    (nested / "LICENSE").write_text("MIT License\n\nPermission is hereby granted, free of charge, to any person\n", encoding="utf-8")
+    file_index = {
+        "repo": {"path": str(repo)},
+        "records": [{"path": "vendor/lib/LICENSE", "kind": "docs", "binary": False, "size_bytes": 1}],
+    }
+
+    payload = license_cards({}, tmp_path / "audit", file_index, {"records": []}, repo, {"vendor/lib/LICENSE": "ev-000001"})
+    summary = payload["summary"]
+
+    assert summary["root_license"] is None
+    assert summary["root_license_evidence_id"] is None
+    assert summary["root_detection_method"] == "missing_root_license"
+    assert any(item["scope"] == "subtree_root" and item["declared_license"] == "MIT" for item in summary["license_file_detections"])
+
+
 def test_binary_triage_without_consent_does_not_read_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def forbidden_read(*args: object, **kwargs: object) -> bytes:
         raise AssertionError("binary bytes were read without consent")

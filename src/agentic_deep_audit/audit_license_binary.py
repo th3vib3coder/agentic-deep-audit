@@ -156,7 +156,7 @@ def root_license(file_index: dict[str, Any], repo_path: Path, evidence_lookup: d
                     "skipped_reason": "license text unclassifiable: unknown token",
                 }
             )
-    selected = next((item for item in detections if item["scope"] == "root"), detections[0] if detections else None)
+    selected = next((item for item in detections if item["scope"] == "root"), None)
     license_file_detections = detections + skipped
     if selected:
         return selected["declared_license"], selected.get("evidence_id"), selected["detection_method"], selected["confidence"], license_file_detections
