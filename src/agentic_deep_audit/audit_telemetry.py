@@ -18,6 +18,7 @@ from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 from .policy import decide_network
+from .time_utils import current_utc
 
 
 CATEGORIES = [
@@ -88,11 +89,11 @@ def evidence_by_path(audit_dir: Path) -> dict[str, str]:
 
 def parse_iso_datetime(value: str | None) -> datetime:
     if not value:
-        return datetime.now(timezone.utc)
+        return current_utc()
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
-        return datetime.now(timezone.utc)
+        return current_utc()
 
 
 def default_parameters(from_ref: str | None = None, to_ref: str | None = None, as_of: str | None = None) -> dict[str, Any]:

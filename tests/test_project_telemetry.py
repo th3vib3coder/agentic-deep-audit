@@ -141,6 +141,15 @@ def test_telemetry_no_git_records_skipped_parameters_and_limitations(tmp_path: P
     assert validate_audit(audit_dir).ok
 
 
+def test_default_parameters_fallback_honors_source_date_epoch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1704067200")
+
+    parameters = default_parameters()
+
+    assert parameters["time_window_end"] == "2024-01-01T00:00:00+00:00"
+    assert parameters["time_window_start"] == "2023-01-01T00:00:00+00:00"
+
+
 def test_bot_filter_and_identity_normalization_are_deterministic() -> None:
     assert is_bot_author("dependabot[bot]", "123+dependabot[bot]@users.noreply.github.com")
     assert is_bot_author("Build", "bot@example.com")

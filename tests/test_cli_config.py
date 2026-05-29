@@ -203,6 +203,18 @@ def test_argv_overrides_are_recorded_and_run_config_written(tmp_path: Path) -> N
     assert "repo.path" in run_config["provenance"]["environment_specific_paths"]
 
 
+def test_run_config_run_id_honors_source_date_epoch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1704067200")
+    config = write_config(tmp_path)
+    output_dir = tmp_path / "epoch-audit"
+
+    result = run_cli("run", "--config", str(config), "--output-dir", str(output_dir), cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    run_config = json.loads((output_dir / "RUN_CONFIG.json").read_text(encoding="utf-8"))
+    assert run_config["run_id"] == "run-20240101T000000Z"
+
+
 def test_run_config_round_trip_via_run_config_input(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     first_output = tmp_path / "audit-one"

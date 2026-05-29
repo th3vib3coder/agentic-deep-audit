@@ -7,13 +7,13 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .artifact_io import write_json_artifact
 from .limits import FileSizeLimitError, read_text_auto_capped
 from .models import ARTIFACT_PATHS, RUN_CONFIG, load_schema_registry
+from .time_utils import current_run_id
 
 
 DEFAULT_GRAPH_CENTRALITY = {
@@ -416,7 +416,7 @@ def normalize_run_config(config: dict[str, Any], overrides: ArgvOverrides, confi
     repo_config, repo_path_environment_specific = normalize_repo_config(config["repo"], config_path, allowed_roots, overrides.allow_system_roots)
     normalized = {
         "schema_version": str(config.get("schema_version", "1.0")),
-        "run_id": f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        "run_id": current_run_id(),
         "repo": repo_config,
         "profile": config.get("profile", "standard"),
         "mode": config.get("mode", "source-audit"),

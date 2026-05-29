@@ -7,15 +7,15 @@ import hashlib
 import json
 import os
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .artifact_io import write_json_artifact
 from .audit_evidence import evidence_for_records
 from .audit_provenance import sanitize_for_provenance
 from .limits import FileSizeLimitError, MAX_AUDIT_FILE_BYTES, read_bytes_capped
-from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
+from .time_utils import current_utc_iso
 
 
 KIND_VALUES = {"code", "test", "docs", "config", "data", "asset", "generated", "vendored", "binary", "unknown"}
@@ -228,7 +228,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 def run_inventory(run_config: dict[str, Any], audit_dir: Path) -> None:
     records, skipped, repo_path = scan_files(run_config)
     docs = root_doc_status(repo_path)
-    now = datetime.now(timezone.utc).isoformat()
+    now = current_utc_iso()
     repo_payload = sanitize_for_provenance(run_config.get("repo") or {"path": str(repo_path), "commit": None})
     write_json(
         audit_dir / ARTIFACT_PATHS["FILE_INDEX"],

@@ -7,18 +7,18 @@ import os
 import re
 import shutil
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
+from .artifact_io import write_json_artifact
 from .audit_evidence import sync_evidence_identity_from_provenance
 from .bootstrap import enrich_tool_status
 from .limits import FileSizeLimitError, is_safe_repo_relative_path, read_text_auto_capped
 from .mcp_policy import looks_secret, redact_value
-from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 from .policy import decide_command, decide_network
+from .time_utils import current_utc_iso
 
 
 GIT_SAFE_CONFIG = [
@@ -411,7 +411,7 @@ def run_provenance(run_config: dict[str, Any], audit_dir: Path) -> None:
         "schema_version": "1.0",
         "run_id": run_config.get("run_id"),
         "repo": repo_payload,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": current_utc_iso(),
         "source_artifacts": [ARTIFACT_PATHS["RUN_CONFIG"], ARTIFACT_PATHS["FILE_INDEX"]],
         "records": [{"kind": "git", **git}, {"kind": "github", **github}],
         "skipped": False,

@@ -120,6 +120,17 @@ def test_inventory_respects_scope_filters_and_hashes(tmp_path: Path) -> None:
         assert record["sha256"] == sha256_file(repo / path)
 
 
+def test_inventory_and_provenance_generated_at_honor_source_date_epoch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1704067200")
+    _, audit_dir = run_inventory_fixture(tmp_path)
+
+    file_index = json.loads((audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).read_text(encoding="utf-8"))
+    provenance = json.loads((audit_dir / ARTIFACT_PATHS["PROVENANCE"]).read_text(encoding="utf-8"))
+
+    assert file_index["generated_at"] == "2024-01-01T00:00:00+00:00"
+    assert provenance["generated_at"] == "2024-01-01T00:00:00+00:00"
+
+
 def test_inventory_skips_symlinks_before_hashing_targets(tmp_path: Path) -> None:
     repo = prepare_fixture(tmp_path)
     outside = tmp_path / "outside_secret.txt"
