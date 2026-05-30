@@ -66,6 +66,15 @@ def test_mcp_secret_detection_covers_common_provider_tokens() -> None:
     assert all(looks_secret(sample) for sample in samples)
 
 
+def test_looks_secret_does_not_crash_on_malformed_url() -> None:
+    # looks_secret is the project-wide secret detector, run on UNTRUSTED input (target-repo
+    # metadata, adapter output, provenance values). urlparse raises ValueError on malformed URLs
+    # (e.g. invalid IPv6 'https://[::1'); looks_secret must never propagate that — it must return a
+    # bool so no redactor/validator crashes on hostile input.
+    for value in ["https://[::1", "http://[", "https://user:pass@[::1", "%%%", "::::"]:
+        assert isinstance(looks_secret(value), bool)
+
+
 def test_target_repo_manifest_command_is_denied() -> None:
     decision = decide_command(["git", "status"], origin="target_repo_manifest")
 

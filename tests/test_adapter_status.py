@@ -375,3 +375,19 @@ def test_adapter_run_rejects_cwd_outside_repo_root(tmp_path: Path) -> None:
             audit_dir=audit_dir,
             repo_root=repo_root,
         )
+
+
+def test_run_adapter_command_redacts_secrets_in_persisted_status(tmp_path: Path) -> None:
+    # run_adapter_command persists the command into TOOL_STATUS.json (and stderr into
+    # degradation_reason on the completed path). A credential embedded in the command must be
+    # masked, not stored raw — same redaction discipline as the blocked-attempt log (POL-04).
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    adapter = FakeAdapter(adapter_id="cred_probe", provenance_class="industry-known")
+
+    status = run_adapter_command(adapter, ["curl", "-u", "admin:hunter2", "https://internal/x"], cwd=tmp_path, audit_dir=audit_dir)
+
+    assert status.status == "blocked"  # curl is not allowlisted, so no subprocess runs
+    raw = (audit_dir / ARTIFACT_PATHS["TOOL_STATUS"]).read_text(encoding="utf-8")
+    assert "hunter2" not in raw
+    assert "curl" in raw  # non-secret tokens stay legible for forensics

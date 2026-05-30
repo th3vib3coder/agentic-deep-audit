@@ -50,6 +50,22 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def test_mcp_readonly_server_help_advertises_read_only() -> None:
+    # S-C03.12: the read-only MCP server must advertise its read-only nature in --help, so the
+    # safety contract is discoverable from the CLI surface (not only the module docstring, which
+    # argparse does not emit).
+    result = subprocess.run(
+        [sys.executable, "-m", "agentic_deep_audit.mcp_readonly_server", "--help"],
+        cwd=PLUGIN_ROOT,
+        env=cli_env(),
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "read-only" in result.stdout.lower()
+
+
 def symlink_or_skip(target: Path, link: Path, *, target_is_directory: bool = False) -> None:
     try:
         os.symlink(target, link, target_is_directory=target_is_directory)

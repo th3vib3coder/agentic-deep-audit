@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .limits import read_json_capped, read_text_auto_capped
+from .mcp_policy import looks_secret
 from .models import ARTIFACT_PATHS, PLUGIN_ROOT
 from .resources import policy_dir
 
@@ -219,16 +220,101 @@ def _blocked_attempt_lock(path: Path):
             pass
 
 
+_SHORT_CREDENTIAL_FLAG_RE = re.compile(r"^-(p|pw|pwd)$")
+_LONG_CREDENTIAL_FLAG_RE = re.compile(
+    r"(?i)^--(?:[a-z0-9]+[-_])*(pw|pwd|pass|passwd|password|secret|token|auth|authorization|credential|credentials|bearer|api[-_]?key|access[-_]?key|secret[-_]?key)$"
+)
+_INLINE_CREDENTIAL_RE = re.compile(
+    r"(?i)(pw|pwd|pass|passwd|password|secret|token|auth|authorization|credential|credentials|bearer|api[-_]?key|access[-_]?key|secret[-_]?key)\s*[=:]\s*\S"
+)
+# HTTP basic-auth style user[:password] flags (-u/--user/--username/--login). Only a colon-pair
+# value is a secret; a bare username (e.g. `-u root`) must stay legible, so the separated form is
+# gated on a credential value in redact_command_tokens. The inline `--user=user:pass` form is masked
+# directly here (only when it carries a colon pair).
+_USERINFO_FLAG_RE = re.compile(r"(?i)^-{1,2}(u|user|username|login)$")
+_INLINE_USERINFO_RE = re.compile(r"(?i)^-{1,2}(u|user|username|login)=[^\s]*:[^\s]")
+# Attached single-dash password short flags: MySQL's canonical -pPASSWORD with no space. Mask the
+# attached value only for MySQL-family commands so generic port-like flags such as -port stay useful.
+_ATTACHED_CREDENTIAL_RE = re.compile(r"^(-p)\S")
+_MYSQL_COMMANDS = {"mysql", "mysqldump", "mysqladmin", "mysqlshow", "mysqlimport", "mariadb", "mariadb-dump"}
+_EXECUTABLE_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1")
+
+
+def _token_embeds_secret(token: str) -> bool:
+    if "token" in token.lower():
+        return True
+    try:
+        if looks_secret(token):
+            return True
+        if "@" in token and "://" not in token and urlparse(f"//{token}").password:
+            return True
+    except ValueError:
+        # malformed URL-like token: fail closed (mask) rather than risk leaking or crashing the hook
+        return True
+    return bool(_INLINE_CREDENTIAL_RE.search(token) or _INLINE_USERINFO_RE.match(token))
+
+
+def _is_credential_flag(token: str) -> bool:
+    return bool(_SHORT_CREDENTIAL_FLAG_RE.match(token) or _LONG_CREDENTIAL_FLAG_RE.match(token))
+
+
+def _command_basename(command: str) -> str:
+    name = str(command).replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for suffix in _EXECUTABLE_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def redact_command_tokens(tokens: list[str]) -> list[str]:
+    # POL-04: mask any token that embeds a secret before it is persisted to
+    # BLOCKED_COMMANDS_ATTEMPTS.json. Covers provider tokens / high-entropy material / URL userinfo
+    # (looks_secret), the "token" substring, scheme-less user:pass@host, inline credential flags
+    # (--password=VALUE), the separated form (-p VALUE), the attached form (-pVALUE), and HTTP
+    # basic-auth user:password after -u/--user. Over-redaction is the safe direction for a security
+    # log; non-secret structure (command names, hosts, bare usernames) stays legible.
+    redacted: list[str] = []
+    command_name = _command_basename(str(tokens[0])) if tokens else ""
+    redact_value_next = False
+    redact_userinfo_next = False
+    for token in tokens:
+        text = str(token)
+        if redact_value_next:
+            redact_value_next = False
+            redacted.append("<redacted>")
+            continue
+        if redact_userinfo_next:
+            redact_userinfo_next = False
+            if not text.startswith("-") and (":" in text or _token_embeds_secret(text)):
+                redacted.append("<redacted>")
+                continue
+        attached = _ATTACHED_CREDENTIAL_RE.match(text)
+        if attached:
+            if command_name in _MYSQL_COMMANDS:
+                redacted.append(f"{attached.group(1)}<redacted>")
+                continue
+        if _is_credential_flag(text):
+            redact_value_next = True
+        elif _token_embeds_secret(text):
+            redacted.append("<redacted>")
+            continue
+        elif _USERINFO_FLAG_RE.match(text):
+            redact_userinfo_next = True
+        redacted.append(token)
+    return redacted
+
+
 def append_blocked_attempt(audit_dir: Path, decision: CommandDecision, evidence_ids: list[str] | None = None, attempt_id: str | None = None) -> Path:
     audit_dir.mkdir(parents=True, exist_ok=True)
     path = audit_dir / ARTIFACT_PATHS["BLOCKED_COMMANDS_ATTEMPTS"]
+    redacted_command = redact_command_tokens(decision.command)
     attempt = BlockedCommandAttempt(
-        command=decision.command,
+        command=redacted_command,
         origin=decision.origin,
         decision=decision.decision,
         policy_rule=decision.policy_rule,
         evidence_ids=evidence_ids or [],
-        redacted_args=["<redacted>" if "token" in item.lower() else item for item in decision.command],
+        redacted_args=redacted_command,
         attempt_id=attempt_id,
     )
     attempt_payload = asdict(attempt)

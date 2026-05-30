@@ -58,6 +58,24 @@ def run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_copy_snapshot_wraps_read_oserror_as_bootstrap_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # CFG-001: copy_snapshot wraps the size-cap failure (FileSizeLimitError) as BootstrapError,
+    # but a raw OSError from the underlying read (TOCTOU: the file removed/locked after the
+    # existence check) escaped unwrapped, losing the "snapshot read failed: <source>" context.
+    # Both failure modes of the same read must surface as BootstrapError.
+    source = tmp_path / "audit.config.yaml"
+    source.write_text("schema_version: '1.0'\n", encoding="utf-8")
+    destination = tmp_path / "audit" / ARTIFACT_PATHS["AUDIT_CONFIG_SNAPSHOT"]
+
+    def boom(*args: object, **kwargs: object) -> bytes:
+        raise OSError("simulated post-stat read failure")
+
+    monkeypatch.setattr(bootstrap_module, "read_bytes_capped", boom)
+
+    with pytest.raises(BootstrapError):
+        copy_snapshot(source, destination)
+
+
 def test_phase0_bootstrap_creates_only_phase0_artifacts(tmp_path: Path) -> None:
     config = write_config(tmp_path)
 

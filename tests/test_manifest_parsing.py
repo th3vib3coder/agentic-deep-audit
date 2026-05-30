@@ -310,6 +310,9 @@ def test_shape_malformed_package_json_is_skipped_without_aborting(tmp_path: Path
 def test_phase2_validator_rejects_command_without_observed_label(tmp_path: Path) -> None:
     _, audit_dir = run_inventory_fixture(tmp_path)
     manifests_path = audit_dir / ARTIFACT_PATHS["MANIFESTS"]
+    # TQ-008: accept case — before mutation no script trips the observed-only-label rule (the
+    # exact complement of the reject assertion below, so the rule is not vacuously always-firing).
+    assert not any("missing observed-only label" in error for error in validate_manifest_artifacts(audit_dir).errors)
     manifests = json.loads(manifests_path.read_text(encoding="utf-8"))
     package = next(record for record in manifests["records"] if record["path"] == "package.json")
     package["scripts"][0]["label"] = "execute"
@@ -336,6 +339,10 @@ def test_extract_ci_run_commands_handles_block_scalar_chomp_markers() -> None:
     commands = audit_manifest.extract_ci_run_commands(text, ".github/workflows/ci.yml")
     rendered = str(commands)
     assert "echo hello" in rendered and "echo world" in rendered
+    # TQ-002: for this block body the chomp marker is consumed as a block indicator (not emitted as
+    # a command) and source line order is preserved — presence-only checks would miss either fault.
+    assert "|-" not in rendered
+    assert rendered.index("echo hello") < rendered.index("echo world")
 
 
 def test_manifest_records_survives_recursionerror(tmp_path: Path, monkeypatch) -> None:

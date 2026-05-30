@@ -22,6 +22,8 @@ def _schema_registry() -> dict[str, dict[str, Any]]:
 
 def artifact_key_for_path(path: Path) -> str | None:
     path_value = path.as_posix()
+    # Match the longest registered relative path first so a nested artifact (e.g. graph/graph.json)
+    # is never shadowed by a shorter registered path that is a suffix of it (OQ-M26-03).
     for key, relative in sorted(ARTIFACT_PATHS.items(), key=lambda item: len(item[1]), reverse=True):
         if "*" in relative:
             continue
@@ -54,10 +56,10 @@ def validate_json_payload_for_path(path: Path, payload: dict[str, Any]) -> None:
 def write_json_artifact(path: Path, payload: dict[str, Any], *, atomic: bool = False) -> None:
     validate_json_payload_for_path(path, payload)
     text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
     if not atomic:
         path.write_text(text, encoding="utf-8")
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)

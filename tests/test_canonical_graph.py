@@ -514,3 +514,84 @@ def test_graphify_disabled_mode_never_invokes_promoted_adapter(tmp_path: Path, m
     assert "disabled by run configuration" in (audit_dir / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]).read_text(encoding="utf-8")
     assert not (audit_dir / ARTIFACT_PATHS["GRAPHIFY_GRAPH"]).exists()
     assert validate_audit(audit_dir).ok
+
+
+def test_graphify_report_redacts_secrets_in_subprocess_output(tmp_path: Path) -> None:
+    # GR-01: external graphify stdout/stderr is untrusted and may emit secrets; they must be masked
+    # before being persisted to graphify/GRAPH_REPORT.md. markdown_fence_text only strips control
+    # chars / neutralizes fences, not secrets.
+    secret = "sk-ant-api03-" + "A" * 32
+    graph_renderers.write_graphify_report(
+        tmp_path,
+        "completed",
+        ["graphify", "--input", "graph/graph.json", "--output", "graphify/graph.json"],
+        f"debug: loaded key {secret}\nnormal stdout line\n",
+        f"warn: leaked {secret} here",
+        "canonicalhash",
+        "graphifyhash",
+    )
+    report = (tmp_path / ARTIFACT_PATHS["GRAPHIFY_REPORT"]).read_text(encoding="utf-8")
+
+    assert secret not in report
+    assert "normal stdout line" in report  # non-secret lines stay legible
+
+
+def test_graphify_skip_reason_redacts_secrets_in_report_and_status(tmp_path: Path) -> None:
+    # GR-01: the failure-path skip reason is derived from graphify stderr and persisted to BOTH
+    # graphify/GRAPHIFY_SKIPPED.md and TOOL_STATUS.json skipped_reason; secrets must be masked in both.
+    secret = "ghp_" + "C" * 36
+    graph_renderers.record_graphify_skip(
+        tmp_path,
+        {"nodes": [], "edges": []},
+        f"graphify failed: authentication token {secret} rejected",
+        "failed",
+        "failed",
+        command=["graphify"],
+        duration_ms=7,
+        exit_code=1,
+    )
+    skipped = (tmp_path / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]).read_text(encoding="utf-8")
+    status = (tmp_path / ARTIFACT_PATHS["TOOL_STATUS"]).read_text(encoding="utf-8")
+
+    assert secret not in skipped
+    assert secret not in status
+
+
+def test_graphify_pre_promotion_block_redacts_secret_decision_error(tmp_path: Path, monkeypatch) -> None:
+    # GR-01 follow-up: the pre-promotion branch raises before subprocess execution and used to
+    # bypass record_graphify_skip(), persisting str(exc) directly. If a malformed local decision
+    # file contains secret-like material in the reported adapter_id, it must still be redacted in
+    # both GRAPHIFY_SKIPPED.md and TOOL_STATUS.json.
+    audit_dir = run_fixture(tmp_path, "python_basic", command="graph")
+    graph = load_json(audit_dir / ARTIFACT_PATHS["GRAPH"])
+    plugin_root = tmp_path / "plugin-root-secret-decision"
+    decision_path = plugin_root / "docs" / "adapters" / "graphify" / "adapter_decision.json"
+    decision_path.parent.mkdir(parents=True)
+    secret = "ghp_" + "E" * 36
+    write_json(
+        decision_path,
+        {
+            "adapter_id": secret,
+            "installability": {"os": ["Windows"], "notes": "fake graphify mismatch"},
+            "license": {"spdx": "MIT", "compatible_with_target_context": True},
+            "version_pinning": {"strategy": "system", "min_version": None},
+            "command_readonly": "graphify --version",
+            "policy_applied": ["no-exec", "read-only", "path-containment"],
+            "schema_output_observed": {"sample_path": "samples/graph.json", "hash": "fake"},
+            "fallback": "canonical graph",
+            "decision": "promote",
+            "reviewer": "test",
+            "decision_date": "2026-05-23",
+        },
+    )
+
+    monkeypatch.setattr(graph_renderers, "PLUGIN_ROOT", plugin_root)
+
+    write_graphify_outputs(audit_dir, graph)
+
+    skipped = (audit_dir / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]).read_text(encoding="utf-8")
+    status = (audit_dir / ARTIFACT_PATHS["TOOL_STATUS"]).read_text(encoding="utf-8")
+    assert secret not in skipped
+    assert secret not in status
+    assert "<redacted" in skipped
+    assert "<redacted" in status

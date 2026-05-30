@@ -265,3 +265,20 @@ def test_release_docs_do_not_overclaim_optional_adapters() -> None:
 
     for pattern in forbidden:
         assert not re.search(pattern, readme, flags=re.IGNORECASE)
+
+
+def test_validation_chain_imports_without_jsonschema(monkeypatch) -> None:
+    # CFG-002: the entry-point import graph (agentic_deep_audit.cli -> audit_validate ->
+    # validate_extensions -> validate_mcp_export) must stay import-safe when jsonschema is not
+    # importable, exactly like the installed-wheel --no-deps probe expects of the curated module
+    # set. The jsonschema validator is imported lazily only when validation actually runs; every
+    # sibling validation module already follows this and validate_mcp_export must not regress it.
+    import importlib
+
+    chain = ["agentic_deep_audit.validate_mcp_export", "agentic_deep_audit.validate_extensions"]
+    monkeypatch.setitem(sys.modules, "jsonschema", None)  # force ImportError on `import jsonschema`
+    for name in chain:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    for name in chain:
+        importlib.import_module(name)  # must not raise ImportError when jsonschema is unavailable

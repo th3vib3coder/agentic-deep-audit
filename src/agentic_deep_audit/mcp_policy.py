@@ -34,7 +34,14 @@ def looks_secret(value: str) -> bool:
         return False
     if any(pattern.search(value) for pattern in SECRET_PATTERNS):
         return True
-    parsed = urlparse(value)
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        # Malformed URL-like value (e.g. invalid IPv6 'https://[::1') makes urlparse raise. Do not
+        # propagate: looks_secret runs on untrusted input across redaction and validation, so a
+        # crash here would take down a redactor/validator. Skip the userinfo check and fall back to
+        # entropy detection (which never parses URLs), always returning a bool.
+        return _high_entropy(value)
     if parsed.username or parsed.password:
         return True
     return _high_entropy(value)

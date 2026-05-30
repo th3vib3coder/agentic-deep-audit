@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
-
 from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .mcp_collision_check import GENERATED_SERVER_NAME, GENERATED_TOOL_NAMES
 from .mcp_policy import looks_secret
@@ -65,6 +63,8 @@ def validate_mcp_config(audit_dir: Path, errors: list[str]) -> None:
     payload = load_json(audit_dir / ARTIFACT_PATHS["MCP_CONFIG"], errors)
     if not payload:
         return
+    from jsonschema import Draft202012Validator
+
     schema = load_schema_registry()["mcp_config"].schema
     for error in sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda item: list(item.path)):
         location = ".".join(str(part) for part in error.path) or "<root>"

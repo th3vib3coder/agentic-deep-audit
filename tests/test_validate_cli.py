@@ -109,3 +109,9 @@ def test_anti_overclaim_language_blocks_unscoped_final_claim(tmp_path: Path) -> 
 
     assert not result.ok
     assert any("anti_overclaim" in error for error in result.errors)
+
+    # TQ-007: negative case — a properly scoped claim must NOT trip the anti-overclaim guard, so
+    # the rule is not simply flagging every "100%".
+    (audit_dir / ARTIFACT_PATHS["REPORT"]).write_text("# Report\n\nWithin the analyzed scope, coverage is 100% complete.\n", encoding="utf-8")
+    scoped_result = validate_audit(audit_dir)
+    assert not any("anti_overclaim" in error for error in scoped_result.errors)

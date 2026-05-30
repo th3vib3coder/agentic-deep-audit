@@ -16,7 +16,7 @@ from ..artifact_io import write_json_artifact
 from ..limits import read_json_capped
 from ..mcp_policy import looks_secret, redact_value
 from ..models import ARTIFACT_PATHS
-from ..policy import decide_command, decide_network
+from ..policy import decide_command, decide_network, redact_command_tokens
 
 
 class AdapterError(RuntimeError):
@@ -151,13 +151,14 @@ def run_adapter_command(
     safe_cwd = resolve_contained_path(repo_root or cwd, cwd)
     resolve_contained_path(audit_dir, Path("."))
     decision = decide_command(command, origin="plugin_allowlist")
+    redacted_command = redact_command_tokens(command)
     if network_target and not decide_network(network_target, policy=network_policy).allowed:
         status = AdapterStatus(
             tool=adapter.adapter_id,
             status="blocked",
             policy="blocked",
             available=False,
-            command=command,
+            command=redacted_command,
             capability=adapter.capability,
             availability="blocked",
             provenance_class=adapter.provenance_class,
@@ -172,7 +173,7 @@ def run_adapter_command(
             status="blocked",
             policy="blocked",
             available=False,
-            command=command,
+            command=redacted_command,
             capability=adapter.capability,
             availability="blocked",
             provenance_class=adapter.provenance_class,
@@ -190,7 +191,7 @@ def run_adapter_command(
             status="failed",
             policy="allowed",
             available=True,
-            command=command,
+            command=redacted_command,
             capability=adapter.capability,
             availability="timeout",
             provenance_class=adapter.provenance_class,
@@ -213,7 +214,7 @@ def run_adapter_command(
         capability=adapter.capability,
         availability="available",
         provenance_class=adapter.provenance_class,
-        degradation_reason=None if completed.returncode == 0 else (completed.stderr.strip()[:200] or "non-zero exit"),
+        degradation_reason=None if completed.returncode == 0 else (str(redact_value(completed.stderr.strip()[:200])) or "non-zero exit"),
         notes=[f"cwd={Path(os.fspath(safe_cwd)).resolve()}"],
     )
     append_tool_status(audit_dir, status)

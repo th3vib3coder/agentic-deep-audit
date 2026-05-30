@@ -292,3 +292,150 @@ def test_markdown_prompt_injection_fixture_is_blocked_from_context() -> None:
     assert {flag["kind"] for flag in readme_result.flagged_ranges} >= {"hidden_tag", "override_marker"}
     assert agents_result.decision == "blocked_from_llm_context"
     assert agents_result.sanitized_text.startswith("> ")
+
+
+def test_blocked_attempt_redacts_embedded_url_credentials_and_secret_tokens(tmp_path: Path) -> None:
+    # POL-04: a blocked command may embed secrets (URL userinfo, provider tokens) that the
+    # naive '"token" in arg' redaction missed, leaking them verbatim through the persisted
+    # `command` field of BLOCKED_COMMANDS_ATTEMPTS.json. Redaction must reuse the project
+    # secret detector (mcp_policy.looks_secret) and cover every persisted token field.
+    secret_pat = "ghp_" + "B" * 36
+    credential_url = "https://alice:s3cr3tPassw0rd@github.com/org/repo.git"
+    decision = CommandDecision(
+        "block",
+        ["git", "clone", credential_url, secret_pat],
+        "host_pre_tool",
+        "blocked_always",
+        "git is always blocked",
+    )
+
+    path = append_blocked_attempt(tmp_path / "audit", decision)
+    raw = path.read_text(encoding="utf-8")
+    attempt = json.loads(raw)["attempts"][0]
+
+    # Non-secret structure stays legible for forensics.
+    assert "git" in attempt["command"]
+    assert "clone" in attempt["command"]
+    # No secret material survives anywhere in the persisted artifact (command or redacted_args).
+    assert "s3cr3tPassw0rd" not in raw
+    assert "alice" not in raw
+    assert secret_pat not in raw
+
+
+def test_blocked_attempt_redacts_flag_and_schemeless_credentials(tmp_path: Path) -> None:
+    # POL-04 (adversarial-review follow-up): credential-bearing flags (inline --password=VALUE and
+    # separated -p VALUE) and scheme-less user:pass@host connection strings were missed by the
+    # "token"-substring + looks_secret gate (short low-entropy values, urlparse needs a scheme for
+    # userinfo). They must also be masked before persisting to BLOCKED_COMMANDS_ATTEMPTS.json.
+    decision = CommandDecision(
+        "block",
+        ["psql", "mysql", "-u", "root", "--password=hunter2", "-p", "s3cr3t-sep", "alice:secretpw@db.internal"],
+        "host_pre_tool",
+        "blocked_always",
+        "psql is always blocked",
+    )
+
+    path = append_blocked_attempt(tmp_path / "audit", decision)
+    raw = path.read_text(encoding="utf-8")
+    attempt = json.loads(raw)["attempts"][0]
+
+    # Non-secret structure (command names, the non-secret -u username) stays legible for forensics.
+    assert "psql" in attempt["command"]
+    assert "root" in attempt["command"]
+    # Credential values are masked everywhere in the persisted artifact.
+    assert "hunter2" not in raw
+    assert "s3cr3t-sep" not in raw
+    assert "secretpw" not in raw
+
+
+def test_blocked_attempt_redacts_http_basic_auth_user_password_pairs(tmp_path: Path) -> None:
+    # POL-04 (round-2): HTTP basic-auth `user:password` pairs (curl -u user:pass / --user user:pass)
+    # are credentials even without an @host or high entropy; the value after -u/--user must be masked
+    # when it carries a colon pair, while a bare username (-u root) stays legible.
+    decision = CommandDecision(
+        "block",
+        ["curl", "-u", "admin:hunter2", "--user", "svc:Passw0rd", "https://internal.api/data"],
+        "host_pre_tool",
+        "blocked_always",
+        "curl is always blocked",
+    )
+
+    path = append_blocked_attempt(tmp_path / "audit", decision)
+    raw = path.read_text(encoding="utf-8")
+    attempt = json.loads(raw)["attempts"][0]
+
+    assert "curl" in attempt["command"]
+    assert "hunter2" not in raw
+    assert "Passw0rd" not in raw
+
+
+def test_blocked_attempt_redacts_attached_short_flag_password(tmp_path: Path) -> None:
+    # POL-04 (round-3): MySQL's canonical inline password attaches to -p with no space (-pPASSWORD;
+    # `-p PASS` would be read as a database name). That single token must be masked (value only,
+    # flag kept) while an attached username -uroot stays legible.
+    decision = CommandDecision(
+        "block",
+        ["mysql", "-h", "db.internal", "-uroot", "-pSup3rS3cr3t!"],
+        "host_pre_tool",
+        "blocked_always",
+        "mysql is always blocked",
+    )
+
+    path = append_blocked_attempt(tmp_path / "audit", decision)
+    raw = path.read_text(encoding="utf-8")
+    attempt = json.loads(raw)["attempts"][0]
+
+    assert "Sup3rS3cr3t" not in raw
+    assert "mysql" in attempt["command"]
+    assert "-uroot" in attempt["command"]  # attached username is not a credential value
+
+    windows_path = append_blocked_attempt(
+        tmp_path / "audit-windows",
+        CommandDecision(
+            "block",
+            ["mysql.exe", "-pWinSup3rS3cr3t!"],
+            "host_pre_tool",
+            "blocked_always",
+            "mysql is always blocked",
+        ),
+    )
+    assert "WinSup3rS3cr3t" not in windows_path.read_text(encoding="utf-8")
+
+
+def test_blocked_attempt_redacts_prefixed_separated_credential_flags(tmp_path: Path) -> None:
+    # POL-04 (round-4): many CLIs use descriptive separated credential flags such as
+    # --client-secret VALUE / --access-token VALUE / --db-password VALUE. These are the same
+    # credential class as --password VALUE and must not persist their following value.
+    decision = CommandDecision(
+        "block",
+        ["tool", "--client-secret", "hunter2", "--access-token", "-dash-secret", "--db-password", "dbpass"],
+        "host_pre_tool",
+        "blocked_always",
+        "tool is always blocked",
+    )
+
+    path = append_blocked_attempt(tmp_path / "audit", decision)
+    raw = path.read_text(encoding="utf-8")
+    attempt = json.loads(raw)["attempts"][0]
+
+    assert "--client-secret" in attempt["command"]
+    assert "hunter2" not in raw
+    assert "dash-secret" not in raw
+    assert "dbpass" not in raw
+
+
+def test_blocked_attempt_keeps_noncredential_port_like_flags_legible(tmp_path: Path) -> None:
+    # The MySQL -pPASSWORD redaction is context-specific; generic port-like options must remain
+    # useful in forensic logs and an uppercase -P is commonly a port flag, not a password flag.
+    decision = CommandDecision(
+        "block",
+        ["tool", "-port", "5432", "-P", "15432"],
+        "host_pre_tool",
+        "blocked_always",
+        "tool is always blocked",
+    )
+
+    path = append_blocked_attempt(tmp_path / "audit", decision)
+    attempt = json.loads(path.read_text(encoding="utf-8"))["attempts"][0]
+
+    assert attempt["command"] == ["tool", "-port", "5432", "-P", "15432"]

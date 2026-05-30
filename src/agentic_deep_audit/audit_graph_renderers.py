@@ -15,6 +15,7 @@ from typing import Any
 from .adapters.base import AdapterStatus, adapter_subprocess_env, append_tool_status
 from .adapters.loader import AdapterBlockedPrePromotion, validate_adapter_promotion
 from .limits import FileSizeLimitError, read_json_capped
+from .mcp_policy import redact_value
 from .models import ARTIFACT_PATHS, PLUGIN_ROOT
 from .policy import append_blocked_attempt, decide_command
 
@@ -210,6 +211,12 @@ def markdown_inline_text(value: str) -> str:
     return markdown_fence_text(value).replace("\r", " ").replace("\n", " ")
 
 
+def _redact_tool_output(text: str) -> str:
+    # GR-01: external adapter stdout/stderr is untrusted and may emit secrets; mask any secret-like
+    # line (reusing the project secret detector) before persisting it into an audit artifact.
+    return "\n".join(str(redact_value(line)) for line in text.splitlines())
+
+
 def write_graphify_report(audit_dir: Path, status: str, command: list[str], stdout: str, stderr: str, canonical_hash: str, graphify_hash: str | None) -> None:
     report = audit_dir / ARTIFACT_PATHS["GRAPHIFY_REPORT"]
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -223,9 +230,9 @@ def write_graphify_report(audit_dir: Path, status: str, command: list[str], stdo
     if graphify_hash is not None:
         lines.append(f"- Graphify graph hash: `{graphify_hash}`")
     if stdout.strip():
-        lines.extend(["", "## Stdout", "", "```text", markdown_fence_text(stdout), "```"])
+        lines.extend(["", "## Stdout", "", "```text", markdown_fence_text(_redact_tool_output(stdout)), "```"])
     if stderr.strip():
-        lines.extend(["", "## Stderr", "", "```text", markdown_fence_text(stderr), "```"])
+        lines.extend(["", "## Stderr", "", "```text", markdown_fence_text(_redact_tool_output(stderr)), "```"])
     report.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -250,7 +257,8 @@ def write_graphify_diff(audit_dir: Path, canonical_hash: str, graphify_hash: str
 
 def record_graphify_skip(audit_dir: Path, graph: dict[str, Any], reason: str, status: str, availability: str, command: list[str] | None = None, duration_ms: int | None = None, exit_code: int | None = None) -> None:
     skip_path = audit_dir / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]
-    safe_reason = markdown_inline_text(reason)
+    redacted_reason = _redact_tool_output(reason)
+    safe_reason = markdown_inline_text(redacted_reason)
     skip_path.write_text(f"# Graphify Skipped\n\nReason: {safe_reason}.\nCanonical graph hash: `{sha256_json(graph)}`.\n", encoding="utf-8")
     append_tool_status(
         audit_dir,
@@ -262,11 +270,11 @@ def record_graphify_skip(audit_dir: Path, graph: dict[str, Any], reason: str, st
             command=command,
             duration_ms=duration_ms,
             exit_code=exit_code,
-            skipped_reason=reason,
+            skipped_reason=redacted_reason,
             capability="graph.external_renderer",
             availability=availability,
             provenance_class="industry-known",
-            degradation_reason=reason if status == "deferred" else None,
+            degradation_reason=redacted_reason if status == "deferred" else None,
         ),
     )
 
@@ -283,23 +291,7 @@ def write_graphify_outputs(audit_dir: Path, graph: dict[str, Any], run_config: d
     try:
         validate_adapter_promotion(PLUGIN_ROOT, "graphify", "industry-known")
     except AdapterBlockedPrePromotion as exc:
-        reason = str(exc)
-        skip_path = audit_dir / ARTIFACT_PATHS["GRAPHIFY_SKIPPED"]
-        skip_path.write_text(f"# Graphify Skipped\n\nReason: {reason}.\nCanonical graph remains `graph/graph.json`.\n", encoding="utf-8")
-        append_tool_status(
-            audit_dir,
-            AdapterStatus(
-                tool="graphify",
-                status="deferred",
-                policy="skipped",
-                available=False,
-                skipped_reason=reason,
-                capability="graph.external_renderer",
-                availability="deferred",
-                provenance_class="industry-known",
-                degradation_reason=reason,
-            ),
-        )
+        record_graphify_skip(audit_dir, graph, str(exc), "deferred", "deferred")
         return
     if shutil.which("graphify") is None:
         record_graphify_skip(
@@ -336,7 +328,7 @@ def write_graphify_outputs(audit_dir: Path, graph: dict[str, Any], run_config: d
         record_graphify_skip(audit_dir, graph, reason, "failed", "failed", command, duration_ms, completed.returncode)
         return
     if completed.returncode != 0 or not graphify_path.exists():
-        reason = completed.stderr.strip()[:200] or "Graphify did not produce graphify/graph.json"
+        reason = _redact_tool_output(completed.stderr).strip()[:200] or "Graphify did not produce graphify/graph.json"
         record_graphify_skip(audit_dir, graph, reason, "failed", "failed", command, duration_ms, completed.returncode)
         return
     graphify_graph = load_json(graphify_path)

@@ -93,7 +93,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 def copy_snapshot(source: Path, destination: Path) -> str:
     try:
         data = read_bytes_capped(source, label="bootstrap snapshot")
-    except FileSizeLimitError as exc:
+    except (FileSizeLimitError, OSError) as exc:
         raise BootstrapError(f"snapshot read failed: {source}: {exc}") from exc
     destination.write_bytes(data)
     return sha256_file(destination)

@@ -283,7 +283,10 @@ def serve_stdio(audit_dir: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m agentic_deep_audit.mcp_readonly_server")
+    parser = argparse.ArgumentParser(
+        prog="python -m agentic_deep_audit.mcp_readonly_server",
+        description="Minimal read-only MCP-style server for generated audit artifacts (no writes to the audit dir; read-only metadata access).",
+    )
     parser.add_argument("--audit-dir", required=True)
     parser.add_argument("--list-tools", action="store_true")
     parser.add_argument("--call-tool")

@@ -419,6 +419,11 @@ def run_provenance(run_config: dict[str, Any], audit_dir: Path) -> None:
         "git": git,
         "github": github,
     }
+    # PROV-01: sanitize the FULL payload (git/github/records), not just repo_payload, before
+    # persisting. sanitize_for_provenance is recursive and idempotent (redaction placeholders are
+    # not re-redacted), so re-sanitizing the already-clean repo block is a no-op; non-secret fields
+    # (commit, run_id, timestamps, artifact paths) are unchanged. The validator remains the backstop.
+    provenance = sanitize_for_provenance(provenance)
     write_json(audit_dir / ARTIFACT_PATHS["PROVENANCE"], provenance)
     sync_evidence_identity_from_provenance(audit_dir, provenance)
     append_github_tool_status(audit_dir, run_config, github_target, github_mode)

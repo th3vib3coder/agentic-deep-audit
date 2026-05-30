@@ -72,3 +72,14 @@ def test_append_tool_status_rejects_invalid_registered_artifact(tmp_path: Path) 
         append_tool_status(tmp_path, {"tool": "bad"})
 
     assert not (tmp_path / ARTIFACT_PATHS["TOOL_STATUS"]).exists()
+
+
+def test_write_json_artifact_creates_missing_parent_directories(tmp_path: Path) -> None:
+    # OQ-M26-01/02: the non-atomic write path must create missing parents like the atomic path
+    # already does, so write_json_artifact is safe regardless of which writer calls it (no silent
+    # dependence on every caller pre-creating the directory).
+    path = tmp_path / "nested" / "deeper" / "scratch.json"
+
+    write_json_artifact(path, {"created": True})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"created": True}
