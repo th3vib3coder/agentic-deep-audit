@@ -49,8 +49,8 @@ the recorded commit SHA; macOS is `deferred` with no active job in this tranche.
 
 | Runner | Shell | Python version | Command output | Commit SHA | Status |
 |---|---|---|---|---|---|
-| `ubuntu-latest` | bash | 3.10 / 3.11 / 3.12 | pending first green matrix run | pending | `unverified` |
-| `windows-latest` | bash (Git-Bash via `defaults.run.shell`) | 3.10 / 3.11 / 3.12 | pending first green matrix run | pending | `unverified` |
+| `ubuntu-latest` | bash | 3.10 / 3.11 / 3.12 | all 3 Python jobs green (CI run 26708668818) | `0e345a1` | `verified` |
+| `windows-latest` | bash (Git-Bash via `defaults.run.shell`) | 3.10 / 3.11 / 3.12 | all 3 Python jobs green (CI run 26708668818) | `0e345a1` | `verified` |
 | `macos-latest` | — | — | — | — | `deferred` (SD-4: no macos-latest CI job in this tranche) |
 
 ## Export Record
