@@ -16,7 +16,7 @@ Run from repository root.
 
 | Gate | Command | Expected pass condition |
 |---|---|---|
-| Schema and unit validation | `PYTHONPATH=src pytest tests -q` | all package tests pass; current acceptance baseline is 362 collected tests |
+| Schema and unit validation | `PYTHONPATH=src pytest tests -q` | all package tests pass; acceptance baseline is at least 362 collected tests (the shipped suite currently collects more) |
 | Package metadata and skill routing | `PYTHONPATH=src pytest tests/test_release_packaging.py -q` | `.codex-plugin/plugin.json`, `pyproject.toml`, skill references and console alias are valid |
 | Smoke audits | `PYTHONPATH=src python tests/run_smoke_tests.py --report audit/SMOKE_TEST_REPORT.md` | at least three fixture audits pass and list required artifacts |
 | Policy tests | `PYTHONPATH=src pytest tests/test_pre_tool_policy.py tests/test_network_policy.py tests/test_fixture_mcp_policy.py -q` | no-exec, network precedence, MCP collision and redaction gates pass |
@@ -44,8 +44,9 @@ checkers and the private review ledgers are excluded from the public export by t
 
 ## OS Evidence
 
-Per-OS release evidence (SD-4). Status stays `unverified` until the cross-OS CI matrix is green on
-the recorded commit SHA; macOS is `deferred` with no active job in this tranche.
+Per-OS release evidence (SD-4). A row is `unverified` until its cross-OS CI matrix is green on the
+recorded commit SHA, then `verified`; ubuntu-latest + windows-latest are `verified` at `0e345a1`
+(CI run 26708668818). macOS is `deferred` with no active job in this tranche.
 
 | Runner | Shell | Python version | Command output | Commit SHA | Status |
 |---|---|---|---|---|---|
