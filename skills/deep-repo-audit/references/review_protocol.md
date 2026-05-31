@@ -5,7 +5,7 @@ The plugin follows adversarial review discipline. The author of a sequence, arti
 ## Internal Review
 
 - Every implementation sequence starts with a pending row in `REVIEW_LEDGER.md`.
-- A reviewer different from the author checks scope, tests, gate behavior and drift from `piano_doc/implementazione/`.
+- A reviewer different from the author checks scope, tests, gate behavior and drift from the approved implementation plan.
 - REDIRECT or BLOCK findings need file and line, impact, requested patch and closing verification.
 - The author remediates and returns the same scope for post-remediation review.
 - Only after reviewer ACCEPT can the row move from pending to OK.

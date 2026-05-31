@@ -46,6 +46,14 @@ The portable `audit/` tree by default (overridable with `--output-dir`). The gen
 - redaction verification: covered by the redaction-scan tests and the pre-tool policy;
 - write permissions: audit output only.
 
+## Security
+
+The seven adapter security columns for `cli`:
+
+| target execution | network default | host config access | credentials | redaction verification | no-exec enforcement | write permissions |
+|---|---|---|---|---|---|---|
+| none (static, read-only audit; target-repo install scripts, tests, hooks and manifest commands are parsed and recorded, never run) | denied (default-deny; a validated `.network_policy.json` may allow specific domains) | none | none read (config/env values are supplied by the operator only when policy allows) | covered by the provenance/redaction-scan tests and the pre-tool policy | the PreToolUse hook blocks command execution; the engine performs no target-repo execution | confined to the generated `audit/` output tree |
+
 ## expected skipped/deferred behavior
 
 Unavailable optional tools (git, ripgrep, graph/corpus extras) are recorded as `skipped` or

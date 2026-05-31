@@ -38,6 +38,14 @@ read-only.
 - redaction verification: the same provenance/redaction tests gate any image build;
 - write permissions: confined to the mounted `audit/` volume.
 
+## Security
+
+The seven adapter security columns for `container` (deferred; the posture the approved image must honor):
+
+| target execution | network default | host config access | credentials | redaction verification | no-exec enforcement | write permissions |
+|---|---|---|---|---|---|---|
+| none (read-only repo mount; never executes target-repo code) | denied (default-deny egress unless the operator opts in per run) | none (no host secret mounts are permitted) | none read (none baked into the image) | covered by the provenance/MCP redaction tests, which gate any image build | the PreToolUse hook blocks command execution; the engine performs no target-repo execution | confined to the generated `audit/` output tree (the mounted `audit/` volume); the target-repo mount stays read-only |
+
 ## expected skipped/deferred behavior
 
 The container adapter is `deferred` and must not be marketed as supported. Container-specific

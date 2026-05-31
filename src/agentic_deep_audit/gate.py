@@ -32,12 +32,15 @@ PROJECT_SURFACE_PATTERNS: tuple[str, ...] = (
 )
 
 
+# Shipped defaults carry NO private planning paths. A planning workspace supplies its own
+# planning surface (e.g. its implementation/ledger globs) at runtime via --planning-surface;
+# the shipped product gates only its own project surface (operator_go).
 GATE_POLICY: dict[str, list[str]] = {
-    "implementation_realign": ["piano_doc/implementazione/**"],
+    "implementation_realign": [],
     "operator_go": list(PROJECT_SURFACE_PATTERNS),
 }
 
-SENSITIVE_PATHS: tuple[str, ...] = PROJECT_SURFACE_PATTERNS + ("piano_doc/implementazione/**",)
+SENSITIVE_PATHS: tuple[str, ...] = tuple(PROJECT_SURFACE_PATTERNS)
 
 
 @dataclass(frozen=True)
@@ -71,11 +74,19 @@ def read_current_gate(ledger_path: Path) -> str:
     return extract_current_gate(read_text_auto_capped(ledger_path, encoding="utf-8", errors="replace", label="gate ledger"))
 
 
-def decide_path(gate: str, path: str) -> GateDecision:
+def decide_path(
+    gate: str,
+    path: str,
+    *,
+    sensitive_paths: Iterable[str] | None = None,
+    gate_policy: dict[str, list[str]] | None = None,
+) -> GateDecision:
+    sensitive = SENSITIVE_PATHS if sensitive_paths is None else sensitive_paths
+    policy = GATE_POLICY if gate_policy is None else gate_policy
     normalized = normalize_repo_path(path)
-    if not path_matches(normalized, SENSITIVE_PATHS):
+    if not path_matches(normalized, sensitive):
         return GateDecision(gate, normalized, True, "path is outside gated surfaces")
-    if path_matches(normalized, GATE_POLICY.get(gate, [])):
+    if path_matches(normalized, policy.get(gate, [])):
         return GateDecision(gate, normalized, True, f"path allowed by gate {gate}")
     return GateDecision(gate, normalized, False, f"path requires a different gate: {path}")
 
@@ -112,13 +123,18 @@ def changed_paths(repo_root: Path, base: str) -> list[str]:
     return sorted(paths)
 
 
-def check_paths(repo_root: Path, ledger_path: Path, base: str, explicit_paths: list[str]) -> int:
+def check_paths(repo_root: Path, ledger_path: Path, base: str, explicit_paths: list[str], planning_surface: Iterable[str] = ()) -> int:
     gate = read_current_gate(ledger_path)
+    planning = tuple(planning_surface)
+    sensitive = tuple(SENSITIVE_PATHS) + planning
+    policy = {key: list(value) for key, value in GATE_POLICY.items()}
+    if planning:
+        policy["implementation_realign"] = list(planning)
     paths = explicit_paths or changed_paths(repo_root, base)
     print(f"current gate: {gate}")
     blocked: list[GateDecision] = []
     for path in paths:
-        decision = decide_path(gate, path)
+        decision = decide_path(gate, path, sensitive_paths=sensitive, gate_policy=policy)
         status = "ALLOW" if decision.allowed else "DENY"
         print(f"{status} {decision.path} - {decision.reason}")
         if not decision.allowed:
@@ -133,8 +149,14 @@ def build_parser() -> argparse.ArgumentParser:
     check = subparsers.add_parser("check-paths")
     check.add_argument("--base", default="HEAD")
     check.add_argument("--repo-root", default=".")
-    check.add_argument("--ledger", default="piano_doc/013_ledger.md")
+    check.add_argument("--ledger", required=True)
     check.add_argument("--path", action="append", default=[])
+    check.add_argument(
+        "--planning-surface",
+        action="append",
+        default=[],
+        help="extra glob(s) defining the local planning surface (implementation_realign); none ship by default",
+    )
     return parser
 
 
@@ -146,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         ledger_path = Path(args.ledger)
         if not ledger_path.is_absolute():
             ledger_path = repo_root / ledger_path
-        return check_paths(repo_root, ledger_path, args.base, args.path)
+        return check_paths(repo_root, ledger_path, args.base, args.path, args.planning_surface)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

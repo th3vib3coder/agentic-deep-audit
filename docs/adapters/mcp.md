@@ -36,6 +36,14 @@ The existing `audit/` tree, accessed **read-only** (the server creates and modif
 - redaction verification: MCP collision/secret fixtures;
 - write permissions: none (read-only server).
 
+## Security
+
+The seven adapter security columns for `mcp`:
+
+| target execution | network default | host config access | credentials | redaction verification | no-exec enforcement | write permissions |
+|---|---|---|---|---|---|---|
+| none (read-only handoff server; never executes target-repo code) | denied (default-deny; no network unless the host provides transport) | reads host MCP config as read-only metadata for collision detection only | none read beyond redacted metadata | covered by the provenance/MCP redaction tests and the collision/secret fixtures | the PreToolUse hook blocks command execution; the engine performs no target-repo execution | none (read-only server writes nothing) |
+
 ## expected skipped/deferred behavior
 
 Discovered hosts other than Codex and Claude Code are `unverified` (see the host table); collision

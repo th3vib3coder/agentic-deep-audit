@@ -2,9 +2,9 @@
 
 Status: package ready for external review; not released.
 
-Sources: `piano_doc/implementazione/029_seq_release_checklist_and_docs.md`, `piano_doc/018_output_matrix.md`, `piano_doc/010_metriche_validazione.md`.
+Sources: internal release-planning artifacts (retained in the private planning workspace).
 
-Inputs: accepted HAT 2 sequences, validation engine, smoke tests, review packet.
+Inputs: accepted implementation sequences, validation engine, smoke tests, review packet.
 
 Outputs: release commands, pass conditions and caveats for package review.
 
@@ -21,13 +21,50 @@ Run from repository root.
 | Smoke audits | `PYTHONPATH=src python tests/run_smoke_tests.py --report audit/SMOKE_TEST_REPORT.md` | at least three fixture audits pass and list required artifacts |
 | Policy tests | `PYTHONPATH=src pytest tests/test_pre_tool_policy.py tests/test_network_policy.py tests/test_fixture_mcp_policy.py -q` | no-exec, network precedence, MCP collision and redaction gates pass |
 | Wiki and corpus checks | `PYTHONPATH=src pytest tests/test_wiki_pages.py tests/test_corpus_retrieval.py -q` | wiki links/frontmatter and corpus FTS/hash smoke checks pass |
-| Gate hook | `PYTHONPATH=src pytest tests/check_gate_paths.py -q` | HAT 2 path gate fails closed outside `operator_go` and allows current implementation scope |
+| Gate hook | `PYTHONPATH=src pytest tests/check_gate_paths.py -q` | the path gate fails closed outside `operator_go` and allows the current implementation scope |
 | Static compile | `PYTHONPATH=src python -m compileall -q -x "tests[\\/]fixtures" src tests` | package and tests compile without generating cache under fixture repositories |
 | Git whitespace | `git diff --check` | no whitespace errors |
 
 PowerShell form uses `$env:PYTHONPATH = "src"` before the command.
 
-Planning provenance checkers are covered by `tests/test_seq_atomicity.py` and `tests/test_plan_traceability.py`. Run `tests/check_seq_atomicity.py` and `tests/check_plan_traceability.py` directly only in a planning workspace that includes `piano_doc/`.
+Planning-provenance checkers (`tests/check_seq_atomicity.py`, `tests/check_plan_traceability.py`, with `tests/test_seq_atomicity.py` and `tests/test_plan_traceability.py`) run only in the private planning workspace and are excluded from the shipped package.
+
+## Public-Root Scan Commands
+
+The authoritative public-root leak gate (forbidden tree entries + content tokens) is the Python test:
+
+```bash
+PYTHONPATH=src pytest tests/test_public_root_export.py -q
+```
+
+The cross-shell `rg` human-aid scans, with the documented allowlist/exclusions, live verbatim in
+`docs/contracts/release_gates_bash.md` and `docs/contracts/release_gates_powershell.md`. Planning-only
+checkers and the private review ledgers are excluded from the public export by the sync script; the
+`EXPORT_EXCLUDED` set in `tests/test_public_root_export.py` mirrors that exclusion (scan/sync parity).
+
+## OS Evidence
+
+Per-OS release evidence (SD-4). Status stays `unverified` until the cross-OS CI matrix is green on
+the recorded commit SHA; macOS is `deferred` with no active job in this tranche.
+
+| Runner | Shell | Python version | Command output | Commit SHA | Status |
+|---|---|---|---|---|---|
+| `ubuntu-latest` | bash | 3.10 / 3.11 / 3.12 | pending first green matrix run | pending | `unverified` |
+| `windows-latest` | bash (Git-Bash via `defaults.run.shell`) | 3.10 / 3.11 / 3.12 | pending first green matrix run | pending | `unverified` |
+| `macos-latest` | — | — | — | — | `deferred` (SD-4: no macos-latest CI job in this tranche) |
+
+## Export Record
+
+| Field | Value |
+|---|---|
+| Public target branch | `codex/agentic-deep-audit-implementation` |
+| Collected tests | 599 collected — 591 passed, 8 skipped (monorepo package suite) |
+| Sync command | `tools/sync-agentic-plugin-to-publish-root.ps1 -RunTests -Commit -Push` |
+| Source / publish SHAs | recorded in the private review ledger after each push |
+
+The public package is exported only through the sync script (path/blob/name safety plus the
+in-isolation test suite); the private planning workspace, the private review ledgers, and the
+planning-only checkers are excluded from the export.
 
 ## Release Scope
 

@@ -30,7 +30,7 @@ PROJECT_SURFACE_PATTERNS = [
     "pyproject.toml",
 ]
 GATE_POLICY: dict[str, list[str]] = {
-    "implementation_realign": ["piano_doc/implementazione/**"],
+    "implementation_realign": [],
     "operator_go": PROJECT_SURFACE_PATTERNS,
 }
 
@@ -52,16 +52,34 @@ def subprocess_env() -> dict[str, str]:
     [
         ("claude_packet_ready", "src/agentic_deep_audit/x.py", False),
         ("operator_go", "src/agentic_deep_audit/x.py", True),
-        ("implementation_realign", "piano_doc/implementazione/seq.md", True),
         ("implementation_external_accept", "src/agentic_deep_audit/x.py", False),
-        ("operator_go", "piano_doc/implementazione/seq.md", False),
     ],
 )
 def test_policy_table(gate: str, path: str, expected: bool) -> None:
     assert "src/**" in GATE_POLICY["operator_go"]
-    assert GATE_POLICY["implementation_realign"] == ["piano_doc/implementazione/**"]
+    assert GATE_POLICY["implementation_realign"] == []
     assert RUNTIME_GATE_POLICY == GATE_POLICY
     assert decide_path(gate, path).allowed is expected
+
+
+def test_shipped_defaults_carry_no_private_planning_paths() -> None:
+    import agentic_deep_audit.gate as gate_module
+
+    # Shipped defaults gate only the project's own surface; no private planning glob ships.
+    assert gate_module.GATE_POLICY["implementation_realign"] == []
+    assert tuple(gate_module.SENSITIVE_PATHS) == tuple(PROJECT_SURFACE_PATTERNS)
+
+
+def test_planning_surface_is_configurable_at_runtime() -> None:
+    surface = ["planning_area/**"]
+    policy = {"implementation_realign": surface, "operator_go": list(PROJECT_SURFACE_PATTERNS)}
+    sensitive = tuple(PROJECT_SURFACE_PATTERNS) + tuple(surface)
+    # A configured planning surface is gated by implementation_realign...
+    assert decide_path("implementation_realign", "planning_area/seq.md", sensitive_paths=sensitive, gate_policy=policy).allowed is True
+    # ...denied under operator_go (wrong gate)...
+    assert decide_path("operator_go", "planning_area/seq.md", sensitive_paths=sensitive, gate_policy=policy).allowed is False
+    # ...and outside the shipped gated surface when unconfigured.
+    assert decide_path("operator_go", "planning_area/seq.md").allowed is True
 
 
 def test_cli_reports_current_gate_and_blocks_without_operator_go(tmp_path: Path) -> None:

@@ -41,6 +41,14 @@ Caller-specified via the run config `output_dir` (the portable `audit/` tree by 
 - redaction verification: caller-payload redaction tests;
 - write permissions: caller-specified audit output only.
 
+## Security
+
+The seven adapter security columns for `python-api`:
+
+| target execution | network default | host config access | credentials | redaction verification | no-exec enforcement | write permissions |
+|---|---|---|---|---|---|---|
+| none (static, read-only audit; the engine never executes target-repo code) | denied (default-deny network policy) | none | none read (any credential is caller-owned injection only when policy allows) | covered by the provenance/caller-payload redaction tests | the PreToolUse hook blocks command execution; the engine performs no target-repo execution | confined to the caller-specified `audit/` output tree |
+
 ## expected skipped/deferred behavior
 
 Unavailable optional tools are recorded as `skipped`/`degraded` in the tool-status artifact; missing

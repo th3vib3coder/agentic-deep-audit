@@ -2,7 +2,7 @@
 
 Status: development-time template; no adapter promoted by this file alone.
 
-Sources: `../../../piano_doc/015_tooling_matrix.md`, `../../../piano_doc/019_prior_art.md`.
+Sources: internal tooling-matrix and prior-art analysis (retained in the private planning workspace).
 
 Inputs: adapter candidate, target OS, license, version, read-only command, policy, observed output, fallback.
 

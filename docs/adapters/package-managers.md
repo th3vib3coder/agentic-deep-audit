@@ -74,6 +74,14 @@ deep-audit --help
 - redaction verification: the installed-wheel resource and provenance tests cover the package;
 - write permissions: install writes to the venv / pipx app dir and `.audit-tmp/` only.
 
+## Security
+
+The seven adapter security columns for `package-managers`:
+
+| target execution | network default | host config access | credentials | redaction verification | no-exec enforcement | write permissions |
+|---|---|---|---|---|---|---|
+| none (static, read-only audit; nothing runs beyond the package's own console entry point) | `pip`/`pipx` reach the package index at install time (use a prebuilt wheel for an offline install); the audit itself runs network-denied (default-deny) | none (install touches no developer host config) | none read (none required) | covered by the provenance/MCP redaction tests and the installed-wheel resource tests | the PreToolUse hook blocks command execution; the engine performs no target-repo execution | confined to the generated `audit/` output tree, plus the venv / pipx app dir and `.audit-tmp/` (build/install smoke) |
+
 ## expected skipped/deferred behavior
 
 `conda` and OS system package managers (apt, brew, choco) are out of scope and not provided;

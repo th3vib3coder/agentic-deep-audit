@@ -53,6 +53,14 @@ outside the runner workspace.
 - redaction verification: the provenance redaction tests run as part of the unit suite;
 - write permissions: confined to the runner workspace (`audit/`, `.audit-tmp/`).
 
+## Security
+
+The seven adapter security columns for `ci`:
+
+| target execution | network default | host config access | credentials | redaction verification | no-exec enforcement | write permissions |
+|---|---|---|---|---|---|---|
+| none (the audit never executes target-repo code; only the package's own test suite runs) | the audit runs network-denied (default-deny); only the runner's package install step uses network | none (CI runners carry no developer host config) | none read (the gates need no secrets) | covered by the provenance/MCP redaction tests, run as part of the unit suite | the PreToolUse hook blocks command execution; the engine performs no target-repo execution | confined to the generated `audit/` output tree and `.audit-tmp/` (build/install smoke) within the runner workspace |
+
 ## expected skipped/deferred behavior
 
 GitLab CI, Azure Pipelines and Buildkite are documented targets, not per-system validation-

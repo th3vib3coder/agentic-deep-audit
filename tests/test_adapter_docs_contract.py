@@ -66,6 +66,40 @@ CLOSED_STATUS_ENUM = (
 # Demotion-evidence columns (006 "Demotion Rules"; S-A03).
 DEMOTION_FIELDS = ("old status", "new status", "evidence", "next review gate")
 
+# The seven per-adapter security columns (004; S-E03). Every adapter doc must declare all
+# seven, and the contract reproduces the same matrix as the source of the standard.
+SEVEN_SECURITY_COLUMNS = (
+    "target execution",
+    "network default",
+    "host config access",
+    "credentials",
+    "redaction verification",
+    "no-exec enforcement",
+    "write permissions",
+)
+
+
+def test_each_adapter_doc_declares_seven_security_columns():
+    missing_by_doc = {}
+    for path in NINE_ADAPTER_DOC_PATHS:
+        lowered = (PACKAGE_ROOT / path).read_text(encoding="utf-8").lower()
+        missing = [column for column in SEVEN_SECURITY_COLUMNS if column not in lowered]
+        if missing:
+            missing_by_doc[path] = missing
+    assert not missing_by_doc, (
+        "every adapter doc must declare all seven security columns "
+        f"{SEVEN_SECURITY_COLUMNS}; missing per doc: {missing_by_doc}"
+    )
+
+
+def test_adapter_contract_declares_security_matrix_columns():
+    lowered = ADAPTER_CONTRACT.read_text(encoding="utf-8").lower()
+    missing = [column for column in SEVEN_SECURITY_COLUMNS if column not in lowered]
+    assert not missing, (
+        "adapter_contract.md must define the security matrix with all seven columns; "
+        f"missing: {missing}"
+    )
+
 
 def test_adapter_contract_declares_closed_doc_list_and_nine_fields():
     # read_text raises FileNotFoundError when the contract doc is absent (the RED state).

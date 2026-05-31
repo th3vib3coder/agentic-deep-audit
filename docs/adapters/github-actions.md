@@ -38,6 +38,14 @@ smoke and git-dependent steps. Nothing is written outside the runner workspace.
 - redaction verification: the git/GitHub provenance redaction tests run in the matrix;
 - write permissions: confined to the runner workspace (`audit/`, `.audit-tmp/`).
 
+## Security
+
+The seven adapter security columns for `github-actions`:
+
+| target execution | network default | host config access | credentials | redaction verification | no-exec enforcement | write permissions |
+|---|---|---|---|---|---|---|
+| none (the audit never executes target-repo code; only the package's own test suite runs) | the audit runs network-denied (default-deny); only the runner's package install (`pip`) uses network | none (the runner is ephemeral and carries no developer host config) | none read (no secrets are referenced by the workflow; it needs none) | covered by the provenance/MCP redaction tests, run as the git/GitHub provenance tests in the matrix | the PreToolUse hook blocks command execution; the engine performs no target-repo execution | confined to the generated `audit/` output tree and `.audit-tmp/` (build/install smoke) within the runner workspace |
+
 ## expected skipped/deferred behavior
 
 `macos-latest` is `deferred (SD-4)` — present only as a comment in the workflow matrix, never

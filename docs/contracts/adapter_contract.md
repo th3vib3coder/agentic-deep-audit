@@ -80,8 +80,22 @@ categories that must not be collapsed.
 
 Demotion of any status is recorded with evidence in `RELEASE_CHECKLIST.md` (`## Demotion Evidence`).
 
-## Adapter security columns
+## Security matrix
 
-The seven per-adapter security columns — target-repo execution, network default, host config
-access, credentials, redaction verification, no-exec enforcement, write permissions — are
-enforced on every adapter doc in S-E03; the canonical matrix lives in `output_contract.md`.
+Every adapter doc carries a `## Security` matrix declaring the same seven security columns.
+This contract defines those columns as the source of the standard; each adapter doc fills one
+value row, grounded in that adapter's `security model` field, and the canonical engine-wide
+matrix is also summarized in `output_contract.md`. The seven columns are:
+
+| Column | What it records |
+|---|---|
+| `target execution` | whether the adapter runs target-repo code (the engine is a static, read-only audit and runs none). |
+| `network default` | the default network posture (default-deny unless a validated policy or an install step is explicitly noted). |
+| `host config access` | whether the adapter reads host configuration (none, except the agent/MCP adapters reading host MCP config as read-only metadata for collision detection). |
+| `credentials` | whether the adapter reads credentials (none read). |
+| `redaction verification` | which tests verify redaction of the adapter's artifacts (the provenance/MCP redaction tests). |
+| `no-exec enforcement` | how command execution is blocked (the PreToolUse hook blocks command execution; the engine performs no target-repo execution). |
+| `write permissions` | where the adapter is allowed to write (confined to the generated `audit/` output tree, and `.audit-tmp/` for build/install smoke). |
+
+A doc that omits any of these seven columns is a release blocker (enforced by
+`tests/test_adapter_docs_contract.py`).

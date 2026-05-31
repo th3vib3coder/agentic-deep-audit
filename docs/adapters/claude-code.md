@@ -37,6 +37,14 @@ The portable `audit/` tree in the target repository.
 - redaction verification: runbook redaction checklist + artifact scan;
 - write permissions: audit output only.
 
+## Security
+
+The seven adapter security columns for `claude-code`:
+
+| target execution | network default | host config access | credentials | redaction verification | no-exec enforcement | write permissions |
+|---|---|---|---|---|---|---|
+| none (static, read-only audit; follow the runbook unmodified, no target-repo code is executed) | denied (default-deny network policy) | reads host MCP config as read-only metadata for collision detection only | none read (operator-supplied only) | covered by the provenance/MCP redaction tests, the runbook redaction checklist and the artifact scan | the PreToolUse hook blocks command execution; the engine performs no target-repo execution | confined to the generated `audit/` output tree |
+
 ## expected skipped/deferred behavior
 
 Tools absent from the environment are recorded as `skipped`/`degraded` in `TOOL_STATUS.json`;
