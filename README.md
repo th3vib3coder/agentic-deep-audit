@@ -1,5 +1,7 @@
 # Agentic Deep Audit
 
+[![CI](https://github.com/th3vib3coder/agentic-deep-audit/actions/workflows/agentic-deep-audit.yml/badge.svg)](https://github.com/th3vib3coder/agentic-deep-audit/actions/workflows/agentic-deep-audit.yml)
+
 Agentic Deep Audit is an evidence-first repository audit engine for local and GitHub open-source projects. It combines a Python CLI, a packaged audit skill, Codex and Claude Code host metadata, read-only MCP handoff, schema validation, adversarial review artifacts and portable `audit/` outputs.
 
 The default model treats the target repository as untrusted input. It reads files, records provenance, hashes and evidence ranges, and does **not** execute target repository code, install scripts, package scripts, tests, hooks, MCP configs or CI commands discovered inside the target.
@@ -57,6 +59,7 @@ Agentic Deep Audit is designed for untrusted repositories:
 ### Requirements
 
 - Python `>=3.10`.
+- Platforms: continuously tested in CI (GitHub Actions) on `ubuntu-latest` and `windows-latest` across Python 3.10, 3.11 and 3.12; `macos-latest` is currently `deferred` with no active CI job.
 - Runtime dependencies declared in `pyproject.toml`:
   - `defusedxml`
   - `jsonschema`
@@ -353,6 +356,8 @@ Optional tools are prior art until promoted. Adapter promotion requires:
 - independent reviewer.
 
 `docs/adapters/ADAPTER_EVALUATION.md` is the human review card. The JSON decision is the machine-checkable gate.
+
+Each integration surface has a dedicated adapter doc under `docs/adapters/` — `cli`, `python-api`, `codex`, `claude-code`, `mcp`, `github-actions`, `ci`, `container` and `package-managers` — and every one carries a seven-column security matrix (target execution, network default, host config access, credentials, redaction verification, no-exec enforcement, write permissions) whose contract lives in `docs/contracts/adapter_contract.md`.
 
 Graphify remains optional and isolated from canonical graph outputs unless its adapter decision says `promote`. Source-claim tools are not accepted dependencies in this package.
 
