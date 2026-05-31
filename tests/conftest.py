@@ -75,3 +75,14 @@ def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001 - pytest hook sig
 
 def pytest_unconfigure(config):  # noqa: ARG001 - pytest hook signature.
     cleanup_scaffold_artifacts()
+
+
+def pytest_collection_modifyitems(config, items):  # noqa: ARG001 - pytest hook signature.
+    # Codex adapter tests require the .codex-plugin/ manifest. When the package is exported
+    # without it (isolation/no-Codex install), auto-skip them so the core suite stays green.
+    if (PLUGIN_ROOT / ".codex-plugin").is_dir():
+        return
+    skip_codex = pytest.mark.skip(reason="codex_adapter tests require .codex-plugin/ — skipped in isolation export")
+    for item in items:
+        if item.get_closest_marker("codex_adapter") is not None:
+            item.add_marker(skip_codex)

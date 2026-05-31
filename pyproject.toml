@@ -30,3 +30,6 @@ agentic_deep_audit = ["schemas/*.json", "policies/*.json", "templates/*", "docs/
 
 [tool.pytest.ini_options]
 norecursedirs = ["tests/fixtures"]
+markers = [
+    "codex_adapter: tests that require the .codex-plugin/ manifest; auto-skipped when it is absent (isolation export)",
+]

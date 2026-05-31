@@ -86,6 +86,8 @@ def load_config_file(path: Path) -> dict[str, Any]:
         text = read_text_auto_capped(path, encoding="utf-8-sig", label="audit config")
     except FileSizeLimitError as exc:
         raise ConfigError(f"config read failed: {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"config file is not valid UTF-8: {path}: {exc}") from exc
     try:
         if path.suffix.lower() == ".json":
             data = json.loads(text)

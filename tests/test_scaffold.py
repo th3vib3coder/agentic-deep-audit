@@ -60,6 +60,7 @@ def test_no_orphan_top_level_scaffold_paths() -> None:
     allowed = {
         ".claude-plugin",
         ".codex-plugin",
+        ".gitattributes",
         ".github",
         ".gitignore",
         "README.md",

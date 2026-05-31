@@ -1,0 +1,8 @@
+# Line-ending policy for the standalone package (mirrors the monorepo root so the
+# published package root carries its own policy; the monorepo .gitattributes does not ship).
+* text=auto eol=lf
+
+# Encoding-portability fixtures must preserve EXACT bytes (CRLF, UTF-8 BOM, invalid UTF-8).
+# Without -text, the eol=lf rule above would normalize crlf.txt's CRLF to LF and make
+# tests/test_encoding_portability.py::test_crlf_normalizes vacuous.
+tests/fixtures/encoding_portability/** -text

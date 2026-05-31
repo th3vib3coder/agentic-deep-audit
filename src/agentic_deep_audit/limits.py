@@ -62,8 +62,14 @@ def read_text_auto_capped(
     errors: str | None = None,
     max_bytes: int = MAX_AUDIT_FILE_BYTES,
     label: str = "file",
+    normalize_newlines: bool = False,
 ) -> str:
-    return decode_text_bytes(read_bytes_capped(path, max_bytes, label), encoding=encoding, errors=errors)
+    text = decode_text_bytes(read_bytes_capped(path, max_bytes, label), encoding=encoding, errors=errors)
+    if normalize_newlines:
+        # Opt-in only: callers that care about exact byte offsets (evidence ranges, hashes) keep
+        # the default (no rewrite). CRLF and lone CR both collapse to LF.
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text
 
 
 def read_json_capped(path: Path, *, max_bytes: int = MAX_AUDIT_FILE_BYTES, label: str = "json artifact") -> Any:
