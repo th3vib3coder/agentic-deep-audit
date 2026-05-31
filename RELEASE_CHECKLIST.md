@@ -36,6 +36,36 @@ Planning provenance checkers are covered by `tests/test_seq_atomicity.py` and `t
 - `ADVERSARIAL_REVIEW_PACKET.md` is a handoff artifact for an external reviewer; it is not a self-acceptance.
 - Optional adapters remain deferred unless their `adapter_decision.json` says `promote` and passes the adapter schema.
 
+## Demotion Evidence
+
+If a promotion-target adapter is demoted (its closed-enum status lowered), record the evidence
+here — one sub-table row per demotion event. Cells stay blank until an actual demotion occurs.
+The status values used must come from the closed status enum in `docs/contracts/adapter_contract.md`.
+
+### CLI
+
+| old status | new status | evidence | next review gate |
+|---|---|---|---|
+|  |  |  |  |
+
+### Codex
+
+| old status | new status | evidence | next review gate |
+|---|---|---|---|
+|  |  |  |  |
+
+### Claude Code
+
+| old status | new status | evidence | next review gate |
+|---|---|---|---|
+|  |  |  |  |
+
+### MCP
+
+| old status | new status | evidence | next review gate |
+|---|---|---|---|
+|  |  |  |  |
+
 ## Non-Claims
 
 - No legal advice.
