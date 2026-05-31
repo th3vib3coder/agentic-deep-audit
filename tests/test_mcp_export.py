@@ -66,6 +66,25 @@ def test_mcp_readonly_server_help_advertises_read_only() -> None:
     assert "read-only" in result.stdout.lower()
 
 
+def test_mcp_readonly_server_does_not_write_to_audit_dir(tmp_path: Path) -> None:
+    # S-C03.8: the read-only server must not create or modify any file in the audit dir.
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    (audit_dir / "REPORT.md").write_text("# Report\n\ncontent\n", encoding="utf-8")
+    snapshot = lambda: {str(p.relative_to(audit_dir)): p.read_bytes() for p in audit_dir.rglob("*") if p.is_file()}
+    before = snapshot()
+    handle_request(
+        audit_dir,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "agentic_deep_audit_artifact_read", "arguments": {"path": "REPORT.md"}},
+        },
+    )
+    assert snapshot() == before, "mcp_readonly_server must not create or modify files in the audit dir"
+
+
 def symlink_or_skip(target: Path, link: Path, *, target_is_directory: bool = False) -> None:
     try:
         os.symlink(target, link, target_is_directory=target_is_directory)

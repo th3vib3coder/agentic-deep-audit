@@ -71,3 +71,51 @@ def test_mcp_secret_fixture_contains_authoritative_raw_markers() -> None:
 
     for marker in RAW_SECRET_MARKERS:
         assert marker in rendered
+
+
+ROOT_MCP_DOC = PLUGIN_ROOT / "docs" / "adapters" / "mcp.md"
+MCP_DOC_NINE_FIELDS = (
+    "adapter id",
+    "user entry command",
+    "required files",
+    "optional files",
+    "output directory",
+    "security model",
+    "expected skipped/deferred behavior",
+    "validation command",
+    "ownership of docs/tests",
+)
+
+
+def test_root_mcp_adapter_doc_exists_and_has_nine_fields() -> None:
+    text = ROOT_MCP_DOC.read_text(encoding="utf-8")  # FileNotFoundError when absent (RED)
+    lowered = text.lower()
+    missing = [field for field in MCP_DOC_NINE_FIELDS if f"## {field}" not in lowered]
+    assert not missing, f"docs/adapters/mcp.md missing field sections: {missing}"
+
+
+def test_root_mcp_doc_labels_verified_and_unverified_hosts() -> None:
+    text = ROOT_MCP_DOC.read_text(encoding="utf-8")
+    lowered = text.lower()
+    assert "codex" in lowered and "claude code" in lowered
+    assert "verified" in lowered
+    assert "unverified" in lowered
+    assert any(host in lowered for host in ("cursor", "vs code", "windsurf", "antigravity"))
+    assert "sd-3" in lowered
+
+
+def test_default_host_configs_include_codex() -> None:
+    from pathlib import Path
+
+    from agentic_deep_audit.mcp_collision_check import DEFAULT_HOST_CONFIGS
+
+    assert (Path.home() / ".codex" / "mcp.json") in DEFAULT_HOST_CONFIGS
+
+
+def test_default_host_configs_include_claude() -> None:
+    from pathlib import Path
+
+    from agentic_deep_audit.mcp_collision_check import DEFAULT_HOST_CONFIGS
+
+    assert (Path.home() / ".claude" / "mcp.json") in DEFAULT_HOST_CONFIGS
+    assert (Path.home() / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json") in DEFAULT_HOST_CONFIGS
