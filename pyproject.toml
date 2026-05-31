@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentic-deep-audit"
 version = "0.1.0"
-description = "Evidence-first audit engine with CLI, Codex, MCP and package adapters for local and GitHub open-source repositories."
+description = "Evidence-first audit engine with CLI, Codex, Claude Code, MCP and package adapters for local and GitHub open-source repositories."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary until an explicit release license is selected" }

@@ -61,7 +61,7 @@ def test_local_json_writers_reject_invalid_registered_artifacts(module_name: str
 def test_write_run_config_rejects_invalid_registered_artifact(tmp_path: Path) -> None:
     run_config = {"schema_version": "1.0", "output_dir": str(tmp_path)}
 
-    with pytest.raises(ArtifactSchemaError, match="RUN_CONFIG\\.json failed audit_config schema"):
+    with pytest.raises(ArtifactSchemaError, match="RUN_CONFIG\\.json failed run_config schema"):
         write_run_config(run_config)
 
     assert not (tmp_path / RUN_CONFIG).exists()

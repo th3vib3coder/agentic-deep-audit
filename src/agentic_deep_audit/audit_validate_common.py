@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,7 @@ from .limits import FileSizeLimitError, read_text_auto_capped
 class ValidationResult:
     ok: bool
     errors: list[str]
+    warnings: list[str] = field(default_factory=list)
 
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:

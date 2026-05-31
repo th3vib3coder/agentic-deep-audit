@@ -498,8 +498,51 @@ def validate_observed_command(command: Any, location: str, errors: list[str]) ->
         errors.append(f"{location} command must be blocked by target_repo_manifest_no_exec")
 
 
+def _parse_schema_version_tuple(value: str) -> tuple[int, ...] | None:
+    """Parse a dot-separated numeric schema_version into a tuple; None if non-empty malformed."""
+    try:
+        return tuple(int(part) for part in value.split("."))
+    except ValueError:
+        return None
+
+
+def validate_run_config_launch_surface(audit_dir: Path, errors: list[str], warnings: list[str]) -> None:
+    """Enforce launch_surface semantics on RUN_CONFIG.json via numeric-tuple schema_version.
+
+    Missing or < (1,1) schema_version is legacy and emits a [LEGACY] warning; schema_version
+    >= (1,1) with no launch_surface is a blocker; a malformed non-empty schema_version is a blocker.
+    The JSON Schema only defines the launch_surface shape; presence logic lives here (004).
+    """
+    path = audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]
+    if not path.exists():
+        return
+    run_config = load_json(path, errors)
+    if run_config is None:
+        return
+    raw_version = run_config.get("schema_version")
+    if raw_version is None:
+        version_tuple: tuple[int, ...] = (0,)
+    else:
+        parsed = _parse_schema_version_tuple(str(raw_version))
+        if parsed is None:
+            errors.append("RUN_CONFIG.json schema_version malformed")
+            return
+        version_tuple = parsed
+    if version_tuple < (1, 1):
+        timestamp = run_config.get("run_id") or "unknown"
+        launch_surface = run_config.get("launch_surface")
+        inferred = launch_surface.get("adapter") if isinstance(launch_surface, dict) else "cli"
+        warnings.append(
+            f"[LEGACY] RUN_CONFIG.json predates launch_surface schema (run timestamp {timestamp}); "
+            f"validation proceeded with best-effort adapter inference: {inferred}."
+        )
+    elif "launch_surface" not in run_config:
+        errors.append("RUN_CONFIG.json schema_version >= 1.1 requires launch_surface")
+
+
 def validate_audit(audit_dir: Path) -> ValidationResult:
     errors: list[str] = []
+    warnings: list[str] = []
 
     def _guard(label: str, run) -> None:
         # OQ-M11: a phase validator raising (e.g. on a malformed artifact) must be recorded as a
@@ -510,6 +553,7 @@ def validate_audit(audit_dir: Path) -> ValidationResult:
             errors.append(f"validation_exception: {label}: {type(exc).__name__}: {exc}")
 
     _guard("phase0", lambda: errors.extend(validate_phase0(audit_dir).errors))
+    _guard("run_config_launch_surface", lambda: validate_run_config_launch_surface(audit_dir, errors, warnings))
     _guard("declared_phase_artifacts", lambda: validate_declared_phase_artifacts(audit_dir, errors))
     if audit_dir.exists():
         _guard("json_schemas", lambda: errors.extend(validate_json_artifact_schemas(audit_dir)))
@@ -550,4 +594,4 @@ def validate_audit(audit_dir: Path) -> ValidationResult:
     except Exception as exc:  # noqa: BLE001 - report packet checks must fail as validation blockers.
         errors.append(f"validation_exception: {type(exc).__name__}: {exc}")
     _guard("anti_overclaim", lambda: errors.extend(validate_anti_overclaim_language(audit_dir)))
-    return ValidationResult(ok=not errors, errors=errors)
+    return ValidationResult(ok=not errors, errors=errors, warnings=warnings)

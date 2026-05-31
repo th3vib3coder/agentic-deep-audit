@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Run Config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repo",
+    "profile",
+    "mode",
+    "output_dir",
+    "target_context",
+    "binary_triage_consent"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "launch_surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "adapter_version",
+        "entry_command",
+        "host_os",
+        "cwd_policy"
+      ],
+      "properties": {
+        "adapter": {
+          "enum": [
+            "cli",
+            "python-api",
+            "codex",
+            "claude-code",
+            "mcp",
+            "ci",
+            "container",
+            "package-manager"
+          ]
+        },
+        "adapter_version": {
+          "type": "string"
+        },
+        "entry_command": {
+          "type": "string"
+        },
+        "host_os": {
+          "enum": [
+            "windows",
+            "linux",
+            "macos",
+            "unknown"
+          ]
+        },
+        "cwd_policy": {
+          "enum": [
+            "package-root",
+            "target-repo",
+            "explicit"
+          ]
+        }
+      }
+    },
+    "repo": {
+      "type": "object",
+      "required": [
+        "kind",
+        "path",
+        "github"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "local",
+            "github"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "github": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "profile": {
+      "enum": [
+        "minimal",
+        "standard",
+        "extended",
+        "research"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "source-audit",
+        "binary-triage"
+      ]
+    },
+    "output_dir": {
+      "type": "string"
+    },
+    "scope_filters": {
+      "type": "object"
+    },
+    "network_policy_file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mcp_config": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "host_config_paths": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      }
+    },
+    "blocked_tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blocked_commands_file": {
+      "type": "string"
+    },
+    "target_context": {
+      "type": [
+        "string",
+        "object"
+      ]
+    },
+    "binary_triage_consent": {
+      "type": "boolean"
+    },
+    "graph": {
+      "type": "object"
+    },
+    "security": {
+      "type": "object"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "argv": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "command": {
+      "type": "string"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "override_source": {
+      "type": "object"
+    },
+    "provenance": {
+      "type": "object"
+    },
+    "retrieval": {
+      "type": "object"
+    },
+    "graph_source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

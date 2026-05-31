@@ -26,7 +26,11 @@ def test_python_package_scaffold() -> None:
     init_file = PLUGIN_ROOT / "src" / "agentic_deep_audit" / "__init__.py"
 
     assert init_file.exists()
-    assert init_file.read_text(encoding="utf-8") == ""
+    # S-B05: the package __init__ re-exports the frozen public API surface (was empty pre-S-B05).
+    init_contents = init_file.read_text(encoding="utf-8")
+    assert "from .bootstrap import bootstrap_audit" in init_contents
+    assert "from .audit_validate import validate_audit" in init_contents
+    assert '__all__ = ["bootstrap_audit", "validate_audit"]' in init_contents
 
 
 def test_pyproject_metadata_contract() -> None:

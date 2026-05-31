@@ -189,7 +189,7 @@ def test_run_config_schema_is_bound_to_artifact_path(tmp_path: Path) -> None:
 
     errors = validate_json_artifact_schemas(tmp_path)
 
-    assert any("audit_config_schema: RUN_CONFIG.json" in error and "unexpected" in error for error in errors)
+    assert any("run_config_schema: RUN_CONFIG.json" in error and "unexpected" in error for error in errors)
 
 
 def test_untrusted_markdown_sanitizer_blocks_agentic_markers() -> None:

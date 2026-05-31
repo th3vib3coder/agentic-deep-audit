@@ -103,6 +103,25 @@ def test_phase0_bootstrap_creates_only_phase0_artifacts(tmp_path: Path) -> None:
     assert validate_phase0(audit_dir).ok
 
 
+def test_bootstrap_phase0_emits_launch_surface(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+
+    result = subprocess.run(
+        [sys.executable, str(BOOTSTRAP_SCRIPT), "--config", str(config)],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    audit_dir = tmp_path / "audit"
+    run_config = json.loads((audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).read_text(encoding="utf-8"))
+    assert run_config["schema_version"] == "1.1"
+    launch_surface = run_config["launch_surface"]
+    assert {"adapter", "adapter_version", "entry_command", "host_os", "cwd_policy"} <= set(launch_surface)
+
+
 def test_missing_network_policy_is_skipped_and_validate_rejects_missing_run_config(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     result = run_cli("run", "--config", str(config), cwd=tmp_path)

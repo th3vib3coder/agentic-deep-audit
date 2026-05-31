@@ -76,6 +76,105 @@ def test_validate_cli_writes_zero_blocker_report(tmp_path: Path) -> None:
     assert "## Commands Run" in report
 
 
+def test_validation_result_has_warnings_channel() -> None:
+    from agentic_deep_audit.audit_validate_common import ValidationResult
+
+    result = ValidationResult(ok=True, errors=[])
+    assert isinstance(result.warnings, list)
+    assert result.warnings == []
+    result.warnings.append("example warning")
+    assert result.warnings == ["example warning"]
+
+
+def _write_run_config(audit_dir: Path, **overrides: object) -> None:
+    """Write a minimal valid RUN_CONFIG.json (no schema_version/launch_surface unless overridden)."""
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    payload: dict = {
+        "repo": {"kind": "local", "path": ".", "github": None},
+        "profile": "standard",
+        "mode": "source-audit",
+        "output_dir": "audit",
+        "target_context": "MIT downstream",
+        "binary_triage_consent": False,
+        "run_id": "run-test",
+    }
+    payload.update(overrides)
+    (audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def test_legacy_run_config_passes_with_legacy_warning(tmp_path: Path) -> None:
+    # A legacy RUN_CONFIG (no schema_version, no launch_surface) is a WARNING, not a blocker,
+    # and the warning is rendered into VALIDATION_REPORT.md.
+    from agentic_deep_audit.audit_validate import validate_run_config_launch_surface
+    from agentic_deep_audit.audit_validate_common import ValidationResult
+    from agentic_deep_audit.validation_report import write_validation_report
+
+    audit_dir = tmp_path / "audit"
+    _write_run_config(audit_dir)
+    errors: list[str] = []
+    warnings: list[str] = []
+    validate_run_config_launch_surface(audit_dir, errors, warnings)
+
+    assert errors == []  # legacy is a warning, not a blocker
+    assert any("[LEGACY]" in warning for warning in warnings)
+
+    write_validation_report(audit_dir, ValidationResult(ok=True, errors=[], warnings=warnings), "validate")
+    report = (audit_dir / ARTIFACT_PATHS["VALIDATION_REPORT"]).read_text(encoding="utf-8")
+    assert "[LEGACY] RUN_CONFIG.json predates launch_surface schema (run timestamp " in report
+    assert "validation proceeded with best-effort adapter inference:" in report
+
+
+def test_run_config_schema_1_1_missing_launch_surface_fails(tmp_path: Path) -> None:
+    # Routed through validate_audit so the helper's wiring into the validator is exercised.
+    audit_dir = tmp_path / "audit"
+    _write_run_config(audit_dir, schema_version="1.1")  # 1.1 but no launch_surface
+
+    result = validate_audit(audit_dir)
+
+    assert not result.ok
+    assert any("launch_surface" in error for error in result.errors)
+
+
+def test_run_config_malformed_schema_version_fails(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    _write_run_config(audit_dir, schema_version="v1.1")
+
+    result = validate_audit(audit_dir)
+
+    assert not result.ok
+    assert any("RUN_CONFIG.json schema_version malformed" in error for error in result.errors)
+
+
+CLI_ADAPTER_DOC = PLUGIN_ROOT / "docs" / "adapters" / "cli.md"
+CLI_DOC_NINE_FIELDS = (
+    "adapter id",
+    "user entry command",
+    "required files",
+    "optional files",
+    "output directory",
+    "security model",
+    "expected skipped/deferred behavior",
+    "validation command",
+    "ownership of docs/tests",
+)
+
+
+def test_cli_adapter_doc_has_9_fields() -> None:
+    text = CLI_ADAPTER_DOC.read_text(encoding="utf-8")  # FileNotFoundError when absent (RED)
+    lowered = text.lower()
+    missing = [field for field in CLI_DOC_NINE_FIELDS if f"## {field}" not in lowered]
+    assert not missing, f"docs/adapters/cli.md must declare the nine fields as ## headings; missing: {missing}"
+
+
+def test_readme_has_no_private_path_leak() -> None:
+    import re as _re
+
+    readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "plugins/agentic-deep-audit" not in readme
+    assert "piano_doc" not in readme
+    assert not _re.search(r"PYTHONPATH=\S*(?:plugins|piano_doc|nuove_skill)", readme)
+
+
 def test_validate_cli_writes_report_for_malformed_json(tmp_path: Path) -> None:
     audit_dir = build_full_audit(tmp_path)
     (audit_dir / ARTIFACT_PATHS["GRAPH"]).write_text("{not-json", encoding="utf-8")

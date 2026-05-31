@@ -9,7 +9,7 @@ from jsonschema.exceptions import ValidationError
 
 from agentic_deep_audit import validate_extensions
 from agentic_deep_audit.validate_json_schema import SCHEMA_BY_ARTIFACT_KEY, SCHEMA_EXEMPT_ARTIFACT_KEYS
-from agentic_deep_audit.models import ARTIFACT_PATHS
+from agentic_deep_audit.models import ARTIFACT_PATHS, load_schema_registry
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +35,7 @@ def assert_invalid(schema_value: dict, sample: dict) -> None:
 def test_all_group_a_schemas_parse() -> None:
     expected = {
         "audit_config.schema.json",
+        "run_config.schema.json",
         "network_policy.schema.json",
         "blocked_commands.schema.json",
         "file_index.schema.json",
@@ -580,3 +581,42 @@ def test_schema_evidence_ids_reject_short_or_malformed_values() -> None:
 
     for bad_id in ["ev-1", "not-evidence"]:
         assert_invalid(risk_schema, {**valid, "findings": [{**valid_finding, "evidence_ids": [bad_id]}]})
+
+
+def test_run_config_schema_registered_and_accepts_legacy_and_launch_surface_shape() -> None:
+    # The RUN_CONFIG.json artifact is validated against run_config.schema.json (superseding
+    # audit_config). The registry must load it (models.SCHEMA_FILES) and the artifact mapping
+    # must repoint to it. Numeric-tuple launch_surface presence logic is the validator's job
+    # (S-B03); here we only assert the schema SHAPE accepts legacy and 1.1 documents.
+    registry = load_schema_registry()
+    run_config_schema = registry["run_config"].schema  # KeyError (RED) until SCHEMA_FILES carries run_config
+    Draft202012Validator.check_schema(run_config_schema)
+    assert SCHEMA_BY_ARTIFACT_KEY["RUN_CONFIG"] == "run_config"
+
+    base = {
+        "repo": {"kind": "local", "path": ".", "github": None},
+        "profile": "standard",
+        "mode": "source-audit",
+        "output_dir": "audit",
+        "target_context": "MIT downstream",
+        "binary_triage_consent": False,
+    }
+    # Legacy output: no schema_version at all (validator infers legacy; the schema accepts the shape).
+    validate_sample(run_config_schema, dict(base))
+    # Legacy output: explicit schema_version "1.0".
+    validate_sample(run_config_schema, {**base, "schema_version": "1.0"})
+    # Current output: schema_version "1.1" with a fully-formed launch_surface object.
+    validate_sample(
+        run_config_schema,
+        {
+            **base,
+            "schema_version": "1.1",
+            "launch_surface": {
+                "adapter": "cli",
+                "adapter_version": "0.1.0",
+                "entry_command": "deep-audit run",
+                "host_os": "linux",
+                "cwd_policy": "package-root",
+            },
+        },
+    )

@@ -138,6 +138,26 @@ def test_package_metadata_console_alias_and_plugin_name_align() -> None:
     assert "docs/adapters/*/*.json" in package_data
 
 
+def test_identity_surfaces_name_both_primary_agents_or_neither() -> None:
+    # SD-2 co-equality: a public identity surface that names Codex as an adapter must also name
+    # Claude Code (or name neither). The two primary agents are co-equal; neither is "the" host.
+    readme = read(PLUGIN_ROOT / "README.md")
+    readme_blurb = next(para for para in readme.split("\n\n") if "audit engine" in para.lower())
+    pyproject = tomllib.loads(read(PLUGIN_ROOT / "pyproject.toml"))
+    codex_manifest = json.loads(read(PLUGIN_ROOT / ".codex-plugin" / "plugin.json"))
+    surfaces = {
+        "README blurb": readme_blurb,
+        "pyproject description": pyproject["project"]["description"],
+        ".codex-plugin description": codex_manifest["description"],
+    }
+    for name, text in surfaces.items():
+        names_codex = "Codex" in text
+        names_claude = "Claude Code" in text
+        assert (not names_codex) or names_claude, (
+            f"{name} names Codex but omits co-equal Claude Code (SD-2): {text!r}"
+        )
+
+
 def test_runtime_resources_are_available_from_package_namespace() -> None:
     assert (schema_dir() / "audit_config.schema.json").exists()
     assert (policy_dir() / "BLOCKED_COMMANDS_ALLOWLIST.json").exists()

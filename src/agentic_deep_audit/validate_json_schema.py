@@ -11,7 +11,7 @@ from .models import ARTIFACT_PATHS, load_schema_registry
 
 
 SCHEMA_BY_ARTIFACT_KEY = {
-    "RUN_CONFIG": "audit_config",
+    "RUN_CONFIG": "run_config",
     "NETWORK_POLICY": "network_policy",
     "DEFAULT_NETWORK_POLICY": "network_policy",
     "BLOCKED_COMMANDS_ALLOWLIST": "blocked_commands",

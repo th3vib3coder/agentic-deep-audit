@@ -13,24 +13,27 @@ def write_validation_report(audit_dir: Path, result: ValidationResult, command: 
     path = audit_dir / ARTIFACT_PATHS["VALIDATION_REPORT"]
     path.parent.mkdir(parents=True, exist_ok=True)
     blockers = result.errors
+    warnings = result.warnings
     lines = [
         "# Validation Report",
         "",
         f"- Command: `{command}`",
         f"- Status: `{'pass' if result.ok else 'blocker'}`",
         f"- Blocker count: `{len(blockers)}`",
+        f"- Warning count: `{len(warnings)}`",
         "",
         "## Pass",
         "",
         "- Validation engine executed.",
         "",
-        "## Warn",
-        "",
-        "- None.",
-        "",
-        "## Blockers",
+        "## Warnings",
         "",
     ]
+    if warnings:
+        lines.extend(f"- {warning}" for warning in warnings)
+    else:
+        lines.append("- None.")
+    lines.extend(["", "## Blockers", ""])
     if blockers:
         lines.extend(f"- {error}" for error in blockers)
     else:
@@ -46,6 +49,8 @@ def write_validation_report(audit_dir: Path, result: ValidationResult, command: 
                 "status": "pass" if result.ok else "blocker",
                 "blocker_count": len(blockers),
                 "blockers": blockers,
+                "warning_count": len(warnings),
+                "warnings": warnings,
             },
             indent=2,
             sort_keys=True,

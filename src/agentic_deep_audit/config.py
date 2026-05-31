@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -266,8 +267,8 @@ def canonicalize_retrieval(value: Any) -> dict[str, Any]:
     return retrieval
 
 
-def validate_audit_config_document(config: dict[str, Any]) -> None:
-    schema = load_schema_registry()["audit_config"].schema
+def validate_audit_config_document(config: dict[str, Any], schema_name: str = "audit_config") -> None:
+    schema = load_schema_registry()[schema_name].schema
     from jsonschema import Draft202012Validator
 
     validator = Draft202012Validator(schema)
@@ -276,6 +277,37 @@ def validate_audit_config_document(config: dict[str, Any]) -> None:
         first = errors[0]
         location = ".".join(str(part) for part in first.path) or "<root>"
         raise ConfigError(f"config schema invalid at {location}: {first.message}")
+
+
+def _detect_host_os() -> str:
+    platform_name = sys.platform
+    if platform_name.startswith("win"):
+        return "windows"
+    if platform_name.startswith("linux"):
+        return "linux"
+    if platform_name == "darwin":
+        return "macos"
+    return "unknown"
+
+
+def _adapter_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("agentic-deep-audit")
+    except Exception:
+        return "0.1.0"
+
+
+def build_launch_surface(adapter: str = "cli", entry_command: str | None = None, cwd_policy: str = "package-root") -> dict[str, str]:
+    """Build the launch_surface block recorded in the run config (schema 1.1; see docs/contracts/output_contract.md)."""
+    return {
+        "adapter": adapter,
+        "adapter_version": _adapter_version(),
+        "entry_command": entry_command or "",
+        "host_os": _detect_host_os(),
+        "cwd_policy": cwd_policy,
+    }
 
 
 def _stringify_path(path: Path) -> str:
@@ -415,7 +447,8 @@ def normalize_run_config(config: dict[str, Any], overrides: ArgvOverrides, confi
     allowed_roots = _resolve_allowed_roots(overrides.allowed_roots, config_path)
     repo_config, repo_path_environment_specific = normalize_repo_config(config["repo"], config_path, allowed_roots, overrides.allow_system_roots)
     normalized = {
-        "schema_version": str(config.get("schema_version", "1.0")),
+        "schema_version": "1.1",
+        "launch_surface": build_launch_surface(entry_command=overrides.command),
         "run_id": current_run_id(),
         "repo": repo_config,
         "profile": config.get("profile", "standard"),
@@ -478,7 +511,7 @@ def load_run_config(path: Path, overrides: ArgvOverrides) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ConfigError("run config root must be an object")
     data = copy.deepcopy(data)
-    validate_audit_config_document(data)
+    validate_audit_config_document(data, schema_name="run_config")
     if "repo" not in data or not isinstance(data["repo"], dict):
         raise ConfigError("run config requires repo object")
     allowed_roots = _resolve_allowed_roots(overrides.allowed_roots, path)

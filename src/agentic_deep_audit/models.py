@@ -110,6 +110,7 @@ ARTIFACT_PATHS: dict[str, str] = {
 
 SCHEMA_FILES: dict[str, str] = {
     "audit_config": "audit_config.schema.json",
+    "run_config": "run_config.schema.json",
     "network_policy": "network_policy.schema.json",
     "blocked_commands": "blocked_commands.schema.json",
     "file_index": "file_index.schema.json",

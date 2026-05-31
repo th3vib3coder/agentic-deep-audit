@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_io import write_json_artifact
-from .config import ArgvOverrides, ConfigError, load_config_file, load_run_config, normalize_run_config, sha256_file
+from .config import ArgvOverrides, ConfigError, build_launch_surface, load_config_file, load_run_config, normalize_run_config, sha256_file
 from .limits import FileSizeLimitError, read_bytes_capped
 from .models import ARTIFACT_PATHS
 
@@ -299,7 +299,8 @@ def progress_markdown() -> str:
 
 def bootstrap_audit(run_config: dict[str, Any], cwd: Path | None = None) -> Path:
     base = (cwd or Path.cwd()).resolve()
-    run_config.setdefault("schema_version", "1.0")
+    run_config.setdefault("schema_version", "1.1")
+    run_config.setdefault("launch_surface", build_launch_surface())
     audit_dir = resolve_output_dir(str(run_config["output_dir"]), base)
     audit_dir.mkdir(parents=True, exist_ok=True)
 

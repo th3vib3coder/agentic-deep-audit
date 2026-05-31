@@ -165,6 +165,26 @@ def test_centrality_defaults_and_overrides(tmp_path: Path) -> None:
     assert centrality["tie_break"] == ["size_bytes_desc", "path_normalized_asc"]
 
 
+def test_generated_run_config_has_schema_version_1_1_and_launch_surface(tmp_path: Path) -> None:
+    config = {
+        "schema_version": "1.0",
+        "repo": {"kind": "local", "path": ".", "github": None},
+        "profile": "standard",
+        "mode": "source-audit",
+        "output_dir": "audit",
+        "target_context": "MIT downstream",
+        "binary_triage_consent": False,
+    }
+    normalized = normalize_run_config(config, ArgvOverrides(command="run", argv=["run"]), None)
+    assert normalized["schema_version"] == "1.1"
+    launch_surface = normalized["launch_surface"]
+    assert isinstance(launch_surface, dict)
+    assert {"adapter", "adapter_version", "entry_command", "host_os", "cwd_policy"} <= set(launch_surface)
+    assert launch_surface["adapter"] == "cli"
+    assert launch_surface["host_os"] in {"windows", "linux", "macos", "unknown"}
+    assert launch_surface["cwd_policy"] == "package-root"
+
+
 def test_retrieval_rrf_defaults_and_config_override_source(tmp_path: Path) -> None:
     config = {
         "schema_version": "1.0",
