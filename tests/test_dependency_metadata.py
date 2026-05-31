@@ -41,7 +41,11 @@ def _dep_justifications() -> set[str]:
 
 
 def _third_party_imports() -> set[str]:
-    stdlib = set(sys.stdlib_module_names)
+    # `tomllib` is stdlib in 3.11+; on 3.10 it is the failed-import branch of the
+    # `try: import tomllib / except: import tomli as tomllib` shim (tomli IS the declared dep).
+    # Treat it as stdlib on every Python so it is never flagged as an undeclared third-party
+    # import (sys.stdlib_module_names omits it on 3.10).
+    stdlib = set(sys.stdlib_module_names) | {"tomllib"}
     imports: set[str] = set()
     for path in SRC.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
