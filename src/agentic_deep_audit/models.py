@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +30,7 @@ ARTIFACT_PATHS: dict[str, str] = {
     "TOOL_STATUS": TOOL_STATUS,
     "PROGRESS": PROGRESS,
     "BLOCKED_COMMANDS_ATTEMPTS": "BLOCKED_COMMANDS_ATTEMPTS.json",
+    "ENGINE_PRIMITIVES": "ENGINE_PRIMITIVES.json",
     "FILE_INDEX": "FILE_INDEX.json",
     "INVENTORY": "INVENTORY.md",
     "PROVENANCE": "PROVENANCE.json",
@@ -113,6 +113,7 @@ SCHEMA_FILES: dict[str, str] = {
     "run_config": "run_config.schema.json",
     "network_policy": "network_policy.schema.json",
     "blocked_commands": "blocked_commands.schema.json",
+    "engine_primitives": "engine_primitives.schema.json",
     "file_index": "file_index.schema.json",
     "provenance": "provenance.schema.json",
     "manifests": "manifests.schema.json",

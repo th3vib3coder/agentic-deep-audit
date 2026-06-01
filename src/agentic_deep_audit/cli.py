@@ -34,7 +34,8 @@ from .validation_report import write_validation_report
 
 
 CONFIG_COMMANDS = {"run", "inventory", "graph", "surface", "synthesis", "scientific", "telemetry", "risk", "wiki"}
-ALL_COMMANDS = ["run", "inventory", "graph", "surface", "synthesis", "scientific", "telemetry", "risk", "wiki", "validate"]
+URL_COMMAND = "url"
+ALL_COMMANDS = ["run", "inventory", "graph", "surface", "synthesis", "scientific", "telemetry", "risk", "wiki", "validate", URL_COMMAND]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,6 +62,29 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--audit-dir", required=True)
     validate.add_argument("--profile")
     validate.add_argument("--dry-run", action="store_true")
+    url = subparsers.add_parser(
+        URL_COMMAND,
+        help="Clone a GitHub repository and run the deep audit pipeline.",
+        description=(
+            "Validate a GitHub HTTPS URL, clone it to a sandbox path, generate "
+            "a minimal audit config, and invoke the existing run pipeline."
+        ),
+    )
+    url.add_argument("url", help="https://github.com/<owner>/<repo>")
+    url.add_argument("--output-dir", help="Defaults to ./audit_runs/<safe_repo_name>/")
+    url.add_argument(
+        "--profile",
+        default="standard",
+        choices=["minimal", "standard", "extended", "research"],
+    )
+    url.add_argument("--allowed-root", action="append", default=[])
+    url.add_argument("--dry-run", action="store_true")
+    url.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Clone timeout in seconds. Default: 300.",
+    )
     return parser
 
 
@@ -325,6 +349,16 @@ def main(argv: list[str] | None = None) -> int:
             return handle_config_command(args, [args.command, *actual_argv[1:]])
         if args.command == "validate":
             return handle_validate(args)
+        if args.command == URL_COMMAND:
+            from .audit_from_url import run_url_workflow
+            return run_url_workflow(
+                url=args.url,
+                output_dir=args.output_dir,
+                profile=args.profile,
+                allowed_roots=args.allowed_root,
+                dry_run=args.dry_run,
+                timeout_seconds=args.timeout,
+            )
     except (ConfigError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

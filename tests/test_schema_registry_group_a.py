@@ -38,6 +38,7 @@ def test_all_group_a_schemas_parse() -> None:
         "run_config.schema.json",
         "network_policy.schema.json",
         "blocked_commands.schema.json",
+        "engine_primitives.schema.json",
         "file_index.schema.json",
         "provenance.schema.json",
         "manifests.schema.json",

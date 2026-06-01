@@ -15,6 +15,7 @@ SCHEMA_BY_ARTIFACT_KEY = {
     "NETWORK_POLICY": "network_policy",
     "DEFAULT_NETWORK_POLICY": "network_policy",
     "BLOCKED_COMMANDS_ALLOWLIST": "blocked_commands",
+    "ENGINE_PRIMITIVES": "engine_primitives",
     "FILE_INDEX": "file_index",
     "PROVENANCE": "provenance",
     "MANIFESTS": "manifests",

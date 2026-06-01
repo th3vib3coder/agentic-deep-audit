@@ -14,6 +14,7 @@ Each artifact below is required, optional-with-skipped-rationale, bundled policy
 - `TOOL_STATUS.json`
 - `PROGRESS.md`
 - `BLOCKED_COMMANDS_ATTEMPTS.json`
+- `ENGINE_PRIMITIVES.json`
 
 ## Phase 1
 

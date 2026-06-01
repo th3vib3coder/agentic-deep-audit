@@ -10,7 +10,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility.
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-GENERATED_NAMES = {".git", ".pytest_cache", "__pycache__", "build", "dist", ".coverage"}
+GENERATED_NAMES = {".git", ".pytest_cache", ".ruff_cache", "__pycache__", "build", "dist", ".coverage"}
 
 
 def test_plugin_manifest_contract() -> None:
@@ -66,6 +66,7 @@ def test_no_orphan_top_level_scaffold_paths() -> None:
         "README.md",
         "RELEASE_CHECKLIST.md",
         "assets",
+        "commands",
         "docs",
         "hooks",
         "policies",
