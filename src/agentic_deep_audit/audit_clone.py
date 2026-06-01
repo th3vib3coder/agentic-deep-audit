@@ -524,9 +524,25 @@ def clone_repo(
             "AUDIT_DIR_OUTSIDE_OUTPUT",
         ) from exc
 
-    # T-URL-08 sandbox escape check: the resolved clone path MUST live under
-    # the resolved clone_root. A crafted safe_repo_name with ``..`` would slip
-    # the directory boundary; we reject before any FS or subprocess work.
+    # T-URL-08 sandbox escape check (part 1): the resolved clone_root MUST live
+    # under output_dir. A pre-existing ``output_dir/_clone`` SYMLINK pointing
+    # outside output_dir would otherwise have ``.resolve()`` follow it, making
+    # clone_root land outside the sandbox; the subsequent clone_path check would
+    # then pass (clone_path IS under the symlink target) and the clone would
+    # write outside output_dir. Rejecting here closes that symlink-redirect hole
+    # before any FS or subprocess work. (CI-caught: only reproducible where the
+    # platform grants symlink-creation privilege.)
+    try:
+        clone_root.relative_to(output_dir)
+    except ValueError as exc:
+        raise CloneError(
+            f"clone root escapes output_dir (symlinked _clone?): {clone_root}",
+            "SANDBOX_ESCAPE",
+        ) from exc
+
+    # T-URL-08 sandbox escape check (part 2): the resolved clone path MUST live
+    # under the resolved clone_root. A crafted safe_repo_name with ``..`` would
+    # slip the directory boundary; we reject before any FS or subprocess work.
     try:
         clone_path.relative_to(clone_root)
     except ValueError as exc:

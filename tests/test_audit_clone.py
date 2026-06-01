@@ -748,6 +748,46 @@ def test_clone_root_symlink_escape_rejected(
     assert not (outside / parsed.safe_repo_name).exists()
 
 
+def test_clone_root_symlink_escape_rejected_via_resolve(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-URL-08 (platform-independent): a ``_clone`` that RESOLVES outside
+    output_dir (the symlink-redirect hole) is rejected with SANDBOX_ESCAPE
+    before any subprocess. The sibling test_clone_root_symlink_escape_rejected
+    needs real symlink-creation privilege and SKIPS on Windows-without-privilege
+    (which is why CI, not local Windows, first caught the missing guard); this
+    monkeypatch variant simulates the escape so the guard is verified on EVERY
+    platform.
+    """
+    parsed = _make_parsed()
+    output_dir = (tmp_path / "out").resolve()
+    audit_dir = output_dir / "audit"
+    outside = (tmp_path / "outside").resolve()
+    output_dir.mkdir()
+    audit_dir.mkdir()
+    outside.mkdir()
+
+    real_resolve = Path.resolve
+
+    def _fake_resolve(self: Path, *args: object, **kwargs: object) -> Path:
+        resolved = real_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+        # Simulate ``output_dir/_clone`` being a symlink that points outside.
+        if resolved.name == "_clone":
+            return outside
+        return resolved
+
+    monkeypatch.setattr(Path, "resolve", _fake_resolve)
+    monkeypatch.setattr(
+        "subprocess.run", MagicMock(side_effect=AssertionError("must not run"))
+    )
+
+    with pytest.raises(audit_clone.CloneError) as excinfo:
+        audit_clone.clone_repo(parsed, output_dir, audit_dir)
+    assert excinfo.value.reason_code == "SANDBOX_ESCAPE"
+    assert not (outside / parsed.safe_repo_name).exists()
+
+
 def test_clone_rejects_audit_dir_outside_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
