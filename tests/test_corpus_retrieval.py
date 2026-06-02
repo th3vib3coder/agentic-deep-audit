@@ -290,6 +290,27 @@ def test_corpus_redacts_secret_like_tokens_before_exposure(tmp_path: Path) -> No
     assert index["no_secret_check"]["redacted_tokens"] >= 1
 
 
+def test_corpus_secret_check_ignores_code_and_markup_high_entropy() -> None:
+    # FIX-2 (Tier-0): README badge URLs and TS/JS code are high-entropy but NOT secrets; the
+    # corpus no-secret gate must neither redact nor flag them (Understand-Anything false positive).
+    from agentic_deep_audit.audit_corpus import contains_raw_secret, redact_text
+
+    benign = (
+        '[![Claude](https://img.shields.io/badge/Claude_Code-8A2BE2)] '
+        'expect(result.data!.nodes[1].type).toBe("flow")'
+    )
+    redacted, count = redact_text(benign)
+    assert count == 0
+    assert "<redacted" not in redacted
+    assert not contains_raw_secret(benign)
+    # GUARD: a real provider token is still redacted and still flagged as raw secret-like.
+    secret_blob = 'TOKEN = "ghp_abcdefghijklmnopQRST"'
+    redacted_secret, secret_count = redact_text(secret_blob)
+    assert secret_count >= 1
+    assert "ghp_abcdefghijklmnopQRST" not in redacted_secret
+    assert contains_raw_secret(secret_blob)
+
+
 def test_validator_rejects_source_artifact_hash_drift(tmp_path: Path) -> None:
     audit_dir = run_corpus_fixture(tmp_path)
     file_index_path = audit_dir / ARTIFACT_PATHS["FILE_INDEX"]

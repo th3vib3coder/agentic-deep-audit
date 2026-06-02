@@ -49,6 +49,7 @@ from typing import Any
 import yaml
 
 from .audit_clone import ClonedRepo
+from .audit_validate_common import ValidationResult
 from .config import (
     ArgvOverrides,
     ConfigError,
@@ -69,6 +70,12 @@ EXIT_INVALID_URL = 2
 EXIT_CLONE_FAILED = 3
 EXIT_CONFIG_FAILED = 4
 EXIT_PIPELINE_FAILED = 5
+#: Pipeline ``run`` succeeded but the finalize/validate step WITHHELD the final REPORT.md
+#: (validation blockers — e.g. a genuinely secret-bearing corpus). Distinct from
+#: ``EXIT_PIPELINE_FAILED`` so an automated caller can tell "audit produced, final report gated"
+#: from "pipeline crashed"; mirrors the non-zero exit ``deep-audit validate`` returns on blockers.
+#: FIX-3 (Tier-0, 2026-06-02). The human-facing blockers live in ``VALIDATION_REPORT.md``.
+EXIT_VALIDATION_BLOCKED = 6
 
 __all__ = [
     "ACCEPTED_PROFILES",
@@ -79,6 +86,7 @@ __all__ = [
     "EXIT_INVALID_URL",
     "EXIT_OK",
     "EXIT_PIPELINE_FAILED",
+    "EXIT_VALIDATION_BLOCKED",
     "ConfigGenerationError",
     "generate_minimal_config",
     "run_url_workflow",
@@ -101,9 +109,12 @@ ACCEPTED_TARGET_CONTEXT_STRINGS: frozenset[str] = frozenset(
 )
 
 #: Default preset for ``target_context`` when the operator does not pass one.
-#: Operator decision Q-NEW-2 in
-#: ``url_workflow/012_open_questions.md``.
-DEFAULT_TARGET_CONTEXT: str = "MIT downstream"
+#: Operator decision Q-NEW-2, re-opened 2026-06-02: the original ``MIT downstream`` default
+#: imposed an ``allowed_languages == ["python"]`` reuse lens on EVERY audited repo, which made
+#: the Understand-Anything (TypeScript/React) reuse cards all ``target_language_mismatch``.
+#: The URL workflow now defaults to the language-agnostic preset (match-all) so the audit never
+#: pre-filters by the wrong language. See ``url_workflow/026_seq_tier0_hardening.md``.
+DEFAULT_TARGET_CONTEXT: str = "language-agnostic"
 
 
 class ConfigGenerationError(Exception):
@@ -412,7 +423,9 @@ def run_url_workflow(
         ``EXIT_PIPELINE_FAILED`` (5) iff ``cli.main`` returned exactly 1
         (the generic-error convention) — any other non-zero exit from the
         ``run`` subcommand is returned verbatim so specific argparse codes
-        (e.g. 2 for unrecognized argv) reach the operator unchanged.
+        (e.g. 2 for unrecognized argv) reach the operator unchanged;
+        ``EXIT_VALIDATION_BLOCKED`` (6) when the pipeline ran but the
+        finalize/validate step withheld ``REPORT.md`` (validation blockers).
     """
     # Lazy imports keep the module top free of audit_clone + cli dependencies
     # at module load. This also avoids a potential circular import: cli.py
@@ -562,18 +575,12 @@ def run_url_workflow(
         # 6+ codes) is propagated verbatim so the specific signal survives.
         return EXIT_PIPELINE_FAILED if exit_code == 1 else exit_code
 
-    # ---- Step 7: optional artifact-presence smoke check (AC-5, AC-10) -----
-    # The pipeline already validates its own artifacts; we only WARN on
-    # missing markers and do NOT fail the workflow on absence here, because
-    # finalize_audit + validate_audit are the authoritative gate.
-    #
-    # REMEDIATION-S008-1 Fix 3 (F-SF-08-5): the WARNING and OK diagnostics
-    # used to be emitted together when artifacts were missing, contradicting
-    # each other ("WARNING: ... missing" then "OK: audit written"). The OK
-    # marker is now suppressed whenever ``missing`` is non-empty; the WARNING
-    # path also prints the audit dir for triage. Exit code stays 0 per the
-    # spec's "warning only, non-blocking" contract (finalize_audit +
-    # validate_audit are the authoritative gate, not this smoke check).
+    # ---- Step 7: artifact-presence smoke check (AC-5, AC-10; F-SF-08-5) ----
+    # Non-blocking presence check for the three baseline markers. We WARN on
+    # missing markers but do NOT return here; the authoritative gate is the
+    # finalize step (Step 8) below. REMEDIATION-S008-1 Fix 3 invariant: an
+    # "OK" success marker is NEVER emitted alongside a "WARNING: audit
+    # incomplete" line (the OK print in Step 8 is gated on ``not missing``).
     expected_artifacts = ("RUN_CONFIG.json", "TOOL_STATUS.json", "PROGRESS.md")
     missing = [name for name in expected_artifacts if not (audit_dir / name).exists()]
     if missing:
@@ -582,9 +589,53 @@ def run_url_workflow(
             file=sys.stderr,
         )
         print(f"audit dir: {audit_dir}", file=sys.stderr)
-    else:
+
+    # ---- Step 8 (FIX-3, Tier-0 2026-06-02): finalize so REPORT.md is produced
+    # end-to-end. The ``run`` subcommand stops after the pipeline phases and
+    # NEVER calls finalize_audit, so historically ``deep-audit url`` produced
+    # every artifact EXCEPT the human-facing REPORT.md (emitted only by the
+    # validate/finalize path) — the operator had to run ``deep-audit validate``
+    # by hand. We finalize here so the URL workflow is genuinely end-to-end.
+    #
+    # finalize_audit returns a validation-result object (it does not raise on
+    # validation blockers). A failed finalize WITHHOLDS the report and returns
+    # EXIT_VALIDATION_BLOCKED (6) — a distinct non-zero signal, NOT exit-0 — so an
+    # automated caller can distinguish "report gated by validation" from a clean
+    # run; the blockers are recorded in VALIDATION_REPORT.md, which the
+    # operator/agent reads. We deliberately do NOT echo the raw blocker text to
+    # stderr (it can contain artifact paths and would couple this diagnostic to
+    # validator wording); a count + a pointer to the report is the stable,
+    # leak-free signal. See url_workflow/026_seq_tier0_hardening.md (FIX-3).
+    from .cli import finalize_audit
+
+    finalize_command = f"deep-audit url {url} --profile {profile}"
+    try:
+        finalize_result: ValidationResult = finalize_audit(audit_dir, finalize_command)
+    except Exception as exc:  # noqa: BLE001 - never crash the orchestrator; surface the crash.
+        # A finalize CRASH (OSError writing the report, or a programming bug in validate/report
+        # code) is distinct from a routine validation BLOCK (handled below via finalize_result.ok).
+        # We say "crashed" and include a truncated message so a genuine bug is not mistaken for a
+        # benign gated report; exit stays EXIT_VALIDATION_BLOCKED (no clean report produced either
+        # way). Swarm P2.
         print(
-            f"OK: audit written to {audit_dir} (exit_code={exit_code})",
+            f"WARNING: finalize step crashed; final report withheld: "
+            f"{type(exc).__name__}: {str(exc)[:200]}",
             file=sys.stderr,
         )
+        print(f"audit dir: {audit_dir}", file=sys.stderr)
+        return EXIT_VALIDATION_BLOCKED
+
+    if not finalize_result.ok:
+        print(
+            "WARNING: final report withheld; audit validation has "
+            f"{len(finalize_result.errors)} blocker(s); see VALIDATION_REPORT.md",
+            file=sys.stderr,
+        )
+        print(f"audit dir: {audit_dir}", file=sys.stderr)
+        return EXIT_VALIDATION_BLOCKED
+
+    # finalize ok -> REPORT.md produced. Suppress the OK marker when the baseline smoke check
+    # flagged missing markers, preserving REMEDIATION-S008-1 Fix 3 (never co-emit WARNING+OK).
+    if not missing:
+        print(f"OK: audit finalized; REPORT.md written to {audit_dir}", file=sys.stderr)
     return EXIT_OK

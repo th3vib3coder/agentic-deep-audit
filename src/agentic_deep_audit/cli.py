@@ -26,6 +26,7 @@ from .audit_surface import run_surface
 from .audit_synthesis import run_synthesis
 from .audit_telemetry import run_project_telemetry
 from .audit_validate import validate_audit
+from .audit_validate_common import ValidationResult
 from .audit_wiki import run_wiki
 from .bootstrap import bootstrap_audit
 from .config import ArgvOverrides, ConfigError, load_config_file, load_run_config, normalize_run_config
@@ -308,7 +309,7 @@ def handle_config_command(args: argparse.Namespace, argv: list[str]) -> int:
     return 0
 
 
-def finalize_audit(audit_dir: Path, command: str):
+def finalize_audit(audit_dir: Path, command: str) -> ValidationResult:
     initial = validate_audit(audit_dir)
     write_validation_report(audit_dir, initial, command)
     if not initial.ok:

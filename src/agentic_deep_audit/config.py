@@ -56,6 +56,18 @@ TARGET_CONTEXT_PRESETS: dict[str, dict[str, Any]] = {
         "production_required": True,
         "custom_fields": {},
     },
+    # FIX-1 (Tier-0, 2026-06-02): language-agnostic preset for the URL workflow default.
+    # Empty allowed_languages canonicalizes to ["*"] (match-all) so an audited repo is never
+    # filtered through the wrong-language reuse lens. License/production posture mirrors
+    # "MIT downstream"; only the language constraint is removed. See
+    # url_workflow/026_seq_tier0_hardening.md and the re-opened Q-NEW-2 operator decision.
+    "language-agnostic": {
+        "reuse_policy": "language-agnostic",
+        "allowed_languages": [],
+        "license_tolerance": "permissive-only",
+        "production_required": True,
+        "custom_fields": {},
+    },
 }
 
 

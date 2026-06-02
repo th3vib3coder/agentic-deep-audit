@@ -75,6 +75,43 @@ def test_looks_secret_does_not_crash_on_malformed_url() -> None:
         assert isinstance(looks_secret(value), bool)
 
 
+def test_looks_secret_ignores_code_and_markup_high_entropy_tokens() -> None:
+    # FIX-2 (Tier-0, 2026-06-02): the entropy backstop must only fire on contiguous OPAQUE
+    # tokens, NEVER on ordinary high-entropy code/markup. These five are REAL false positives
+    # from the Understand-Anything audit (README badge URLs + TS/JS test assertions) that tripped
+    # _high_entropy and produced an 80-row no_secret_check failure on a JS/TS repo.
+    non_secrets = [
+        'src="https://img.shields.io/badge/Claude_Code-8A2BE2"',
+        "expect(result.concepts).toHaveLength(1",
+        'expect(result.data!.nodes[1].type).toBe("flow")',
+        "oldFp.classes[0].properties",
+        'any).nodes[0].summary).toBe("index.ts")',
+    ]
+    flagged = [value for value in non_secrets if looks_secret(value)]
+    assert flagged == [], f"code/markup wrongly flagged as secret: {flagged}"
+    # GUARD: contiguous opaque blobs and provider-prefixed tokens are STILL detected.
+    assert looks_secret("aB3dE5fG7hI9jK1lM2nO4pQ6")
+    assert looks_secret("ghp_abcdefghijklmnopQRST")
+    assert looks_secret("AKIAABCDEFGHIJKLMNOP")
+
+
+def test_looks_secret_detects_opaque_secrets_with_surrounding_punctuation() -> None:
+    # FIX-2 remediation (swarm P0 + two corpus-fixture regressions): the entropy backstop must catch
+    # an opaque secret RUN even when wrapped in non-opaque punctuation (connection strings, quoted
+    # JSON values, key=value, quoted code). The initial whole-token `fullmatch` gate MISSED these ->
+    # fail-OPEN secret leak (and the mixed_risky / mcp_host_secret_redact corpus no_secret_check
+    # failed). The run-based gate catches the embedded opaque run while still ignoring pure
+    # code/markup (which has no 20+ contiguous opaque run).
+    secrets_with_punct = [
+        "Server=db;Pwd=aB3dE5fG7hI9jK1lM2nO4pQ6;",   # connection string
+        '"apiKey": "aB3dE5fG7hI9jK1lM2nO4pQ6",',      # JSON value
+        "KEY=aB3dE5fG7hI9jK1lM2nO4pQ6",               # env assignment
+        'const k = "aB3dE5fG7hI9jK1lM2nO4pQ6";',      # quoted in code
+    ]
+    leaked = [value for value in secrets_with_punct if not looks_secret(value)]
+    assert leaked == [], f"opaque secrets leaked past entropy backstop: {leaked}"
+
+
 def test_target_repo_manifest_command_is_denied() -> None:
     decision = decide_command(["git", "status"], origin="target_repo_manifest")
 

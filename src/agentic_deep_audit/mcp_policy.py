@@ -19,14 +19,51 @@ SECRET_PATTERNS = [
     re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
     re.compile(r"\bBearer\s+\S{8,}\b", re.IGNORECASE),
 ]
+
 MAX_REDACTION_DEPTH = 256
+
+# FIX-2 (Tier-0, 2026-06-02; remediated after swarm review): entropy detection is a BACKSTOP behind
+# the precise SECRET_PATTERNS. It fires on a contiguous OPAQUE RUN (the secret alphabet: letters,
+# digits, ``_ + -``), NOT on whole whitespace tokens. Ordinary high-entropy CODE/markup — TS/JS
+# identifiers (``expect(x).toBe(y``, ``a.b[0].c``), badge URLs (``src="https://.../badge/...``) —
+# is broken by ``. ( ) [ ] " : / =`` into short fragments and contains NO 20+ contiguous opaque run,
+# so it is excluded (this killed the Understand-Anything false-positive avalanche: 80 flagged file
+# bodies, all README/test-code). An opaque secret embedded in punctuation (connection string
+# ``Pwd=<run>;``, quoted JSON value, ``KEY=<run>``) still EXPOSES its run and is caught — the earlier
+# whole-token ``fullmatch`` gate MISSED these and leaked them (fail-OPEN). ``/`` and ``=`` are
+# deliberately EXCLUDED from the run alphabet so URL paths/query strings cannot form false opaque
+# runs; base64url tokens (``- _``) and bare base64/alnum secrets still match. ``findall`` (not a
+# whole-string match) means redact_text and contains_raw_secret now agree on which runs are
+# secret-like regardless of their differing surrounding-punctuation handling. Provider-prefixed
+# tokens stay caught by SECRET_PATTERNS regardless. See url_workflow/026_seq_tier0_hardening.md.
+#
+# Why ``/`` and ``=`` are excluded: an experiment over the real corpus found NO charset/ratio
+# threshold that robustly separates a base64-standard secret's run from benign URL/path runs
+# (shields.io badge 0.81, repo path 0.78); including ``/`` reintroduces the URL/badge false-positive
+# avalanche. So the entropy run alphabet stays alnum + ``- _`` (base64url).
+#
+# KNOWN LIMITATION (documented, accepted — operator scope decision 2026-06-02): this detector is a
+# redaction BACKSTOP for a repo-audit tool, NOT a comprehensive secret scanner. A base64-STANDARD
+# secret with no provider prefix whose ``/`` fragments it into sub-20 runs is not entropy-flagged.
+# Covered regardless: provider-prefixed tokens via SECRET_PATTERNS (incl. AWS ``AKIA/ASIA`` IDs),
+# base64url, JWT, and any ``/``-free opaque run >=20. Comprehensive / per-provider secret detection
+# is explicitly OUT OF SCOPE (unbounded whack-a-mole; a prior AWS-specific key-name redactor was
+# removed as scope creep). If real secret-scanning is ever wanted, adopt an established scanner
+# ruleset (gitleaks/detect-secrets) as a separate effort. See url_workflow/026_seq_tier0_hardening.md.
+_OPAQUE_RUN = re.compile(r"[A-Za-z0-9_+-]{20,}")
 
 
 def _high_entropy(value: str) -> bool:
-    if len(value) < 20:
-        return False
-    unique_ratio = len(set(value)) / len(value)
-    return unique_ratio > 0.55 and bool(re.search(r"[A-Z]", value)) and bool(re.search(r"[a-z]", value)) and bool(re.search(r"\d", value))
+    for run in _OPAQUE_RUN.findall(value):
+        unique_ratio = len(set(run)) / len(run)
+        if (
+            unique_ratio > 0.55
+            and bool(re.search(r"[A-Z]", run))
+            and bool(re.search(r"[a-z]", run))
+            and bool(re.search(r"\d", run))
+        ):
+            return True
+    return False
 
 
 def looks_secret(value: str) -> bool:

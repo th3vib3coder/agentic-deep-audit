@@ -36,6 +36,7 @@ from agentic_deep_audit.audit_from_url import (
     EXIT_INVALID_URL,
     EXIT_OK,
     EXIT_PIPELINE_FAILED,
+    EXIT_VALIDATION_BLOCKED,
     ConfigGenerationError,
     generate_minimal_config,
     run_url_workflow,
@@ -249,6 +250,26 @@ def test_generate_config_target_context_preset(
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert loaded["target_context"] == DEFAULT_TARGET_CONTEXT
     assert loaded["target_context"] in ACCEPTED_TARGET_CONTEXT_STRINGS
+
+
+def test_default_target_context_is_language_agnostic_not_python_only(
+    cloned_and_dirs: tuple[ClonedRepo, Path, Path],
+) -> None:
+    """FIX-1 (Q-NEW-2 re-opened 2026-06-02): the URL-mode default target_context must NOT
+    impose a python-only reuse lens.
+
+    The Understand-Anything audit (a TypeScript/React repo) had every reuse card flagged
+    ``target_language_mismatch`` because the default ``MIT downstream`` canonicalized to
+    ``allowed_languages == ['python']``. The URL-mode default must be language-agnostic
+    (empty allowed_languages -> canonicalizes to ['*'] = match-all)."""
+    from agentic_deep_audit.audit_reuse import language_match
+    from agentic_deep_audit.config import canonicalize_target_context
+
+    canon = canonicalize_target_context(DEFAULT_TARGET_CONTEXT)
+    assert canon["allowed_languages"] == ["*"]
+    # The exact Understand-Anything symptom: a TS repo must not be language-mismatched by default.
+    assert language_match(["typescript"], canon) is True
+    assert language_match(["python"], canon) is True
 
 
 # ---------------------------------------------------------------------------
@@ -660,6 +681,23 @@ def test_generate_config_loader_rejects_extra_field(
 # regression: a wrong-arity call would be silently accepted by the mock.
 
 
+def _stub_finalize_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``cli.finalize_audit`` to a passing result.
+
+    The orchestration AC tests mock the pipeline (``cli.main``) but never produce a real audit, so
+    the real ``finalize_audit`` (FIX-3) would reject their stub/empty audit dirs and return
+    ``EXIT_VALIDATION_BLOCKED``. Those tests assert WIRING (exit mapping, allowed-root ordering,
+    diagnostics, audit_dir propagation), NOT finalize, so we stub finalize to "ok" to isolate them.
+    The finalize-blocked path has its own dedicated test
+    (``test_run_url_workflow_blocks_when_finalize_reports_validation_failure``)."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "agentic_deep_audit.cli.finalize_audit",
+        lambda *_a, **_k: SimpleNamespace(ok=True, errors=[]),
+    )
+
+
 def _make_parsed() -> ParsedGithubUrl:
     """Build a minimal ParsedGithubUrl matching the SEQ-URL-001 dataclass shape."""
     return ParsedGithubUrl(
@@ -902,6 +940,7 @@ def test_run_url_workflow_success(
         lambda **_kw: audit_dir / "audit.config.yaml",
     )
     monkeypatch.setattr("agentic_deep_audit.cli.main", lambda _argv: 0)
+    _stub_finalize_ok(monkeypatch)
 
     exit_code = run_url_workflow(
         url="https://github.com/octocat/Hello-World",
@@ -1095,6 +1134,7 @@ def test_run_url_workflow_logs_diagnostics(
         lambda **_kw: audit_dir / "audit.config.yaml",
     )
     monkeypatch.setattr("agentic_deep_audit.cli.main", lambda _argv: 0)
+    _stub_finalize_ok(monkeypatch)
 
     run_url_workflow(
         url="https://github.com/octocat/Hello-World",
@@ -1240,6 +1280,7 @@ def test_run_url_workflow_timeout_passthrough(
         lambda **_kw: audit_dir / "audit.config.yaml",
     )
     monkeypatch.setattr("agentic_deep_audit.cli.main", lambda _argv: 0)
+    _stub_finalize_ok(monkeypatch)
 
     run_url_workflow(
         url="https://github.com/octocat/Hello-World",
@@ -1370,6 +1411,7 @@ def test_run_url_workflow_audit_dir_propagated_integration(
         lambda **_kw: audit_dir_expected / "audit.config.yaml",
     )
     monkeypatch.setattr("agentic_deep_audit.cli.main", lambda _argv: 0)
+    _stub_finalize_ok(monkeypatch)
 
     exit_code = run_url_workflow(
         url="https://github.com/octocat/Hello-World",
@@ -1398,6 +1440,177 @@ def test_run_url_workflow_audit_dir_propagated_integration(
     # Defense in depth: the clone directory was created at the expected sandbox path.
     assert expected_clone_path.exists()
     assert (expected_clone_path / ".git").exists()
+
+
+# ---------------------------------------------------------------------------
+# FIX-3 (Tier-0 2026-06-02): a successful run is finalized so REPORT.md exists
+# ---------------------------------------------------------------------------
+
+
+def test_run_url_workflow_finalizes_audit_to_produce_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """FIX-3: after a successful pipeline run, the URL workflow MUST call finalize_audit so
+    REPORT.md is produced end-to-end.
+
+    Pre-fix, ``deep-audit url`` invoked only the ``run`` subcommand, which stops after the
+    pipeline phases and never calls finalize_audit — REPORT.md (emitted only by the
+    validate/finalize path) was therefore never produced, and the operator had to run
+    ``deep-audit validate`` by hand (the Understand-Anything confusion)."""
+    from types import SimpleNamespace
+
+    parsed = _make_parsed()
+    cloned = _make_cloned_repo_for_orchestrator(tmp_path)
+    output_path = tmp_path / "out"
+    audit_dir = output_path / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    # Complete baseline so the smoke check does NOT warn; finalize is the subject here.
+    for name in ("RUN_CONFIG.json", "TOOL_STATUS.json", "PROGRESS.md"):
+        (audit_dir / name).write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "agentic_deep_audit.audit_clone.parse_github_url", lambda _u: parsed
+    )
+    monkeypatch.setattr(
+        "agentic_deep_audit.audit_clone.clone_repo", lambda *_a, **_kw: cloned
+    )
+    monkeypatch.setattr(
+        "agentic_deep_audit.audit_from_url.generate_minimal_config",
+        lambda **_kw: audit_dir / "audit.config.yaml",
+    )
+    monkeypatch.setattr("agentic_deep_audit.cli.main", lambda _argv: 0)
+    _stub_finalize_ok(monkeypatch)
+
+    finalize_calls: list[Path] = []
+
+    def fake_finalize(target_dir, command):
+        finalize_calls.append(Path(target_dir))
+        return SimpleNamespace(ok=True, errors=[])
+
+    monkeypatch.setattr("agentic_deep_audit.cli.finalize_audit", fake_finalize)
+
+    exit_code = run_url_workflow(
+        url="https://github.com/octocat/Hello-World",
+        output_dir=str(output_path),
+        profile="standard",
+        allowed_roots=[],
+        dry_run=False,
+        timeout_seconds=300,
+    )
+
+    assert exit_code == EXIT_OK
+    # The fix: finalize_audit MUST be invoked exactly once with the orchestrator's audit_dir.
+    assert [p.resolve() for p in finalize_calls] == [audit_dir.resolve()]
+    # The operator-facing success marker references the report that is now produced.
+    assert "REPORT.md" in capsys.readouterr().err
+
+
+def test_run_url_workflow_blocks_when_finalize_reports_validation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """FIX-3 (remediated, swarm P2): when finalize_audit reports a validation failure (REPORT.md
+    withheld), the URL workflow returns EXIT_VALIDATION_BLOCKED — a distinct machine signal that the
+    pipeline ran but the final report was gated, matching ``deep-audit validate``'s
+    non-zero-on-blockers contract. The raw blocker text MUST NOT be echoed to stderr (leak-free; the
+    detail lives in VALIDATION_REPORT.md)."""
+    from types import SimpleNamespace
+
+    parsed = _make_parsed()
+    cloned = _make_cloned_repo_for_orchestrator(tmp_path)
+    output_path = tmp_path / "out"
+    audit_dir = output_path / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("RUN_CONFIG.json", "TOOL_STATUS.json", "PROGRESS.md"):
+        (audit_dir / name).write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "agentic_deep_audit.audit_clone.parse_github_url", lambda _u: parsed
+    )
+    monkeypatch.setattr(
+        "agentic_deep_audit.audit_clone.clone_repo", lambda *_a, **_kw: cloned
+    )
+    monkeypatch.setattr(
+        "agentic_deep_audit.audit_from_url.generate_minimal_config",
+        lambda **_kw: audit_dir / "audit.config.yaml",
+    )
+    monkeypatch.setattr("agentic_deep_audit.cli.main", lambda _argv: 0)
+    _stub_finalize_ok(monkeypatch)
+    monkeypatch.setattr(
+        "agentic_deep_audit.cli.finalize_audit",
+        lambda *_a, **_k: SimpleNamespace(
+            ok=False, errors=["CORPUS.sqlite contains raw secret-like text"]
+        ),
+    )
+
+    exit_code = run_url_workflow(
+        url="https://github.com/octocat/Hello-World",
+        output_dir=str(output_path),
+        profile="standard",
+        allowed_roots=[],
+        dry_run=False,
+        timeout_seconds=300,
+    )
+
+    assert exit_code == EXIT_VALIDATION_BLOCKED
+    err = capsys.readouterr().err
+    assert "withheld" in err
+    assert "VALIDATION_REPORT.md" in err
+    assert "1 blocker(s)" in err
+    # Leak-free: the raw blocker text must NOT be echoed to stderr.
+    assert "raw secret-like text" not in err
+
+
+def test_run_url_workflow_surfaces_finalize_crash_without_propagating(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """FIX-3 (remediated, swarm P2): an UNEXPECTED finalize crash (e.g. OSError writing the report)
+    must NOT propagate out of the orchestrator; it surfaces as EXIT_VALIDATION_BLOCKED with a
+    'crashed' diagnostic that NAMES the exception (distinct wording from a routine validation
+    block) so a real bug is not mistaken for a benign gated report."""
+    parsed = _make_parsed()
+    cloned = _make_cloned_repo_for_orchestrator(tmp_path)
+    output_path = tmp_path / "out"
+    audit_dir = output_path / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("RUN_CONFIG.json", "TOOL_STATUS.json", "PROGRESS.md"):
+        (audit_dir / name).write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "agentic_deep_audit.audit_clone.parse_github_url", lambda _u: parsed
+    )
+    monkeypatch.setattr(
+        "agentic_deep_audit.audit_clone.clone_repo", lambda *_a, **_kw: cloned
+    )
+    monkeypatch.setattr(
+        "agentic_deep_audit.audit_from_url.generate_minimal_config",
+        lambda **_kw: audit_dir / "audit.config.yaml",
+    )
+    monkeypatch.setattr("agentic_deep_audit.cli.main", lambda _argv: 0)
+
+    def boom(*_a, **_k):
+        raise OSError("disk full writing VALIDATION_REPORT")
+
+    monkeypatch.setattr("agentic_deep_audit.cli.finalize_audit", boom)
+
+    exit_code = run_url_workflow(
+        url="https://github.com/octocat/Hello-World",
+        output_dir=str(output_path),
+        profile="standard",
+        allowed_roots=[],
+        dry_run=False,
+        timeout_seconds=300,
+    )
+
+    assert exit_code == EXIT_VALIDATION_BLOCKED
+    err = capsys.readouterr().err
+    assert "crashed" in err
+    assert "OSError" in err
 
 
 # =============================================================================
@@ -1637,6 +1850,7 @@ def test_run_url_workflow_success_missing_artifacts_warn_not_ok(
         lambda **_kw: audit_dir / "audit.config.yaml",
     )
     monkeypatch.setattr("agentic_deep_audit.cli.main", lambda _argv: 0)
+    _stub_finalize_ok(monkeypatch)
 
     exit_code = run_url_workflow(
         url="https://github.com/octocat/Hello-World",
