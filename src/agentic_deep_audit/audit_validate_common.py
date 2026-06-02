@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .limits import FileSizeLimitError, read_text_auto_capped
+from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, read_text_auto_capped
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
         errors.append(f"invalid JSON artifact: {path}: symlink artifacts are not allowed")
         return None
     try:
-        payload = json.loads(read_text_auto_capped(path, encoding="utf-8", label="json artifact"))
+        payload = json.loads(read_text_auto_capped(path, encoding="utf-8", max_bytes=MAX_ARTIFACT_FILE_BYTES, label="json artifact"))
     except FileSizeLimitError as exc:
         errors.append(f"invalid JSON artifact: {path}: {exc}")
         return None

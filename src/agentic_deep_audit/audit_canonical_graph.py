@@ -9,7 +9,7 @@ from typing import Any
 
 from .artifact_io import write_json_artifact
 from .audit_graph_renderers import write_graph_renderer_outputs, write_graphify_outputs
-from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
+from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -36,7 +36,7 @@ def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        payload = read_json_capped(path, label="canonical graph input")
+        payload = read_json_capped(path, max_bytes=MAX_ARTIFACT_FILE_BYTES, label="canonical graph input")
     except (OSError, FileSizeLimitError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}

@@ -13,7 +13,7 @@ from typing import Any
 from .adapters.base import AdapterStatus, append_tool_status
 from .artifact_io import write_json_artifact
 from .config import DEFAULT_RRF, sha256_file
-from .limits import FileSizeLimitError, is_safe_repo_relative_path, read_json_capped, read_text_auto_capped, resolve_repo_file
+from .limits import FileSizeLimitError, JsonDepthLimitError, MAX_ARTIFACT_FILE_BYTES, is_safe_repo_relative_path, read_json_capped, read_text_auto_capped, resolve_repo_file
 from .mcp_policy import SECRET_PATTERNS, looks_secret, redact_value
 from .models import ARTIFACT_PATHS
 from .audit_wiki import WIKI_SOURCE_KEYS
@@ -32,6 +32,14 @@ TEXT_COLUMNS = {
 }
 REDACTION_MARKER = re.compile(r"<redacted sha256:[0-9a-f]{64}>")
 MAX_TEXT_FILE_BODY_BYTES = 1_000_000
+#: Total size of the corpus INPUT artifacts (file/evidence/symbol index + canonical graph) above
+#: which run_corpus degrades to a SKIPPED corpus instead of building the FTS index. Building +
+#: scanning a corpus with hundreds of thousands of rows (e.g. OpenHuman: ~100k graph nodes, 31k wiki
+#: pages) is memory-heavy and slow enough to stall finalization/validation. Degrading keeps the run
+#: completing and REPORT.md produced; the FTS corpus is a secondary (agent-query) feature.
+MAX_CORPUS_INPUT_BYTES = 64_000_000
+#: Corpus input artifacts measured against MAX_CORPUS_INPUT_BYTES.
+CORPUS_INPUT_KEYS = ("FILE_INDEX", "EVIDENCE_INDEX", "SYMBOL_INDEX", "GRAPH")
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -41,7 +49,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    return read_json_capped(path, label="corpus input")
+    return read_json_capped(path, max_bytes=MAX_ARTIFACT_FILE_BYTES, label="corpus input")
 
 
 def repo_path_from(file_index: dict[str, Any], run_config: dict[str, Any]) -> Path:
@@ -430,17 +438,37 @@ def populate_wiki(connection: sqlite3.Connection, audit_dir: Path) -> int:
     return count
 
 
+def hash_file_or_skip(path: Path) -> str | None:
+    """sha256 of a file, or None if it cannot be read.
+
+    Lets ``source_artifact_hashes`` degrade (omit the entry, exactly as it already omits a
+    non-existent file) instead of crashing its caller. This is critical on the corpus SKIP path:
+    ``write_corpus_skipped`` hashes the very input artifacts, and the OSError-degrade branch in
+    ``run_corpus`` calls it on the same (possibly genuinely unreadable) artifact that triggered the
+    skip — without this guard the degrade handler itself would re-raise OSError and crash the run.
+    The unreadability is still surfaced loudly via the corpus skip_reason.
+    """
+    try:
+        return sha256_file(path)
+    except OSError:
+        return None
+
+
 def source_artifact_hashes(audit_dir: Path) -> dict[str, str]:
     keys = ["FILE_INDEX", "EVIDENCE_INDEX", "SYMBOL_INDEX", "GRAPH", "MANIFESTS", *WIKI_SOURCE_KEYS]
     result: dict[str, str] = {}
     for key in keys:
         path = audit_dir / ARTIFACT_PATHS[key]
         if path.exists():
-            result[ARTIFACT_PATHS[key]] = sha256_file(path)
+            digest = hash_file_or_skip(path)
+            if digest is not None:
+                result[ARTIFACT_PATHS[key]] = digest
     wiki_root = audit_dir / "wiki"
     if wiki_root.exists():
         for path in sorted(wiki_root.rglob("*.md")):
-            result[path.relative_to(audit_dir).as_posix()] = sha256_file(path)
+            digest = hash_file_or_skip(path)
+            if digest is not None:
+                result[path.relative_to(audit_dir).as_posix()] = digest
     return result
 
 
@@ -503,11 +531,34 @@ def rrf_config(run_config: dict[str, Any]) -> dict[str, Any]:
     return {"k": int(rrf.get("k") or DEFAULT_RRF["k"]), "weights": weights, "override": bool(rrf.get("override")), "override_keys": list(rrf.get("override_keys") or [])}
 
 
-def log_rrf_status(run_config: dict[str, Any], audit_dir: Path) -> None:
+def log_rrf_status(run_config: dict[str, Any], audit_dir: Path, *, skipped_reason: str | None = None) -> None:
     config = rrf_config(run_config)
     notes = [f"k={config['k']}", "weights=" + json.dumps(config["weights"], sort_keys=True)]
     if config["override"]:
         notes.append("override_keys=" + ",".join(config["override_keys"]))
+    if skipped_reason is not None:
+        # The corpus was skipped (FTS5 unavailable / over the build budget / unreadable input), so the
+        # hybrid-retrieval ranker has no index to rank over. Advertise the capability honestly as
+        # skipped/unavailable rather than "available" — otherwise TOOL_STATUS contradicts the corpus
+        # SKIPPED marker. "skipped" (not "degraded") is deliberate: it surfaces as a limitation without
+        # being counted as a tool failure in the runtime metrics.
+        notes.append("corpus skipped: hybrid retrieval unavailable")
+        append_tool_status(
+            audit_dir,
+            AdapterStatus(
+                tool="rrf_ranker",
+                status="skipped",
+                policy="skipped",
+                available=False,
+                version="internal",
+                capability="hybrid_retrieval.rrf",
+                availability="unavailable",
+                skipped_reason=skipped_reason,
+                provenance_class="core",
+                notes=notes,
+            ),
+        )
+        return
     append_tool_status(
         audit_dir,
         AdapterStatus(
@@ -524,24 +575,86 @@ def log_rrf_status(run_config: dict[str, Any], audit_dir: Path) -> None:
     )
 
 
+def corpus_input_total_bytes(audit_dir: Path) -> tuple[int, str]:
+    """Sum of the corpus INPUT artifact sizes (stat, no read) + the name of the largest one."""
+    total = 0
+    largest = ("", 0)
+    for key in CORPUS_INPUT_KEYS:
+        path = audit_dir / ARTIFACT_PATHS[key]
+        try:
+            if not (path.exists() and path.is_file()):
+                continue
+            size = path.stat().st_size
+        except OSError:
+            continue
+        total += size
+        if size > largest[1]:
+            largest = (ARTIFACT_PATHS[key], size)
+    return total, largest[0]
+
+
+def write_corpus_skipped(run_config: dict[str, Any], audit_dir: Path, reason: str) -> None:
+    """Write the corpus SKIPPED state (marker + skipped CORPUS_INDEX, no CORPUS.sqlite).
+
+    Shared by every graceful-degradation path: FTS5 unavailable, corpus inputs over the build budget,
+    or an input artifact above the read cap. The run still completes and REPORT.md is produced;
+    validate_corpus accepts the skipped state.
+    """
+    index_path = audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"]
+    sqlite_path = audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE"]
+    skipped_path = audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE_SKIPPED"]
+    log_rrf_status(run_config, audit_dir, skipped_reason=reason)
+    if sqlite_path.exists():
+        sqlite_path.unlink()
+    skipped_path.write_text(f"# Corpus SQLite Skipped\n\nReason: {reason}\n", encoding="utf-8")
+    write_json(index_path, {"schema_version": "1.0", "run_id": run_config.get("run_id"), "database_path": None, "skipped": True, "skip_reason": reason, "table_counts": {table: 0 for table in TABLES}, "source_artifact_hashes": source_artifact_hashes(audit_dir), "no_secret_check": {"status": "skipped", "reason": "corpus not built"}, "rrf": rrf_config(run_config)})
+
+
 def run_corpus(run_config: dict[str, Any], audit_dir: Path) -> None:
     available, reason = fts5_available()
     index_path = audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"]
     sqlite_path = audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE"]
     skipped_path = audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE_SKIPPED"]
     if not available:
-        log_rrf_status(run_config, audit_dir)
-        if sqlite_path.exists():
-            sqlite_path.unlink()
-        skipped_path.write_text(f"# Corpus SQLite Skipped\n\nReason: SQLite FTS5 unavailable: {reason}\n", encoding="utf-8")
-        write_json(index_path, {"schema_version": "1.0", "run_id": run_config.get("run_id"), "database_path": None, "skipped": True, "skip_reason": f"SQLite FTS5 unavailable: {reason}", "table_counts": {table: 0 for table in TABLES}, "source_artifact_hashes": source_artifact_hashes(audit_dir), "no_secret_check": {"status": "skipped", "reason": "corpus not built"}, "rrf": rrf_config(run_config)})
+        write_corpus_skipped(run_config, audit_dir, f"SQLite FTS5 unavailable: {reason}")
+        return
+    # Large-repo scalability guard: building + secret-scanning an FTS corpus over very large input
+    # artifacts (e.g. a 60MB+ canonical graph.json with ~100k nodes + tens of thousands of wiki
+    # pages) is memory-heavy and slow enough to stall finalization/validation. Degrade gracefully
+    # to a SKIPPED corpus so the run completes and REPORT.md is still produced.
+    input_bytes, largest = corpus_input_total_bytes(audit_dir)
+    if input_bytes > MAX_CORPUS_INPUT_BYTES:
+        write_corpus_skipped(run_config, audit_dir, f"corpus inputs exceed build budget: {input_bytes} > {MAX_CORPUS_INPUT_BYTES} bytes (largest: {largest})")
         return
     if skipped_path.exists():
         skipped_path.unlink()
-    file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"])
-    evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"])
-    symbol_index = load_json(audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"])
-    graph = load_json(audit_dir / ARTIFACT_PATHS["GRAPH"])
+    try:
+        file_index = load_json(audit_dir / ARTIFACT_PATHS["FILE_INDEX"])
+        evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"])
+        symbol_index = load_json(audit_dir / ARTIFACT_PATHS["SYMBOL_INDEX"])
+        graph = load_json(audit_dir / ARTIFACT_PATHS["GRAPH"])
+    except JsonDepthLimitError as exc:
+        # JsonDepthLimitError subclasses FileSizeLimitError; catch it FIRST so an anomalous/adversarial
+        # nesting depth is reported as such rather than masked as a benign "too large" size skip.
+        write_corpus_skipped(run_config, audit_dir, f"corpus input has anomalous JSON nesting depth: {exc}")
+        return
+    except FileSizeLimitError as exc:
+        # Defense in depth: an individual artifact above the (high) own-artifact cap also degrades
+        # gracefully rather than crashing the run with exit 5.
+        write_corpus_skipped(run_config, audit_dir, f"corpus input too large to read: {exc}")
+        return
+    except json.JSONDecodeError as exc:
+        # A corrupt own-artifact degrades (with a distinct, honest reason) instead of crashing the
+        # run — the same graceful-degradation contract the size guard provides.
+        write_corpus_skipped(run_config, audit_dir, f"corpus input is not valid JSON: {exc}")
+        return
+    except OSError as exc:
+        # An input that exists but cannot be read (permission/IO error, or removed mid-run) degrades
+        # gracefully too, rather than crashing the run with an uncaught error — the same contract the
+        # size/depth/parse guards provide. (corpus_input_total_bytes swallows stat OSErrors, so a
+        # genuinely unreadable input can slip past the build-budget guard to here.)
+        write_corpus_skipped(run_config, audit_dir, f"corpus input could not be read: {type(exc).__name__}: {exc}")
+        return
     repo_path = repo_path_from(file_index, run_config)
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     if sqlite_path.exists():

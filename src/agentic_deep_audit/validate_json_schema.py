@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .limits import FileSizeLimitError, read_text_auto_capped
+from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, read_text_auto_capped
 from .models import ARTIFACT_PATHS, load_schema_registry
 
 
@@ -64,7 +64,7 @@ def schema_exempt_relative_paths() -> set[str]:
 
 def load_json_artifact(path: Path, relative: str, errors: list[str]) -> dict[str, Any] | None:
     try:
-        payload = json.loads(read_text_auto_capped(path, encoding="utf-8", label="json artifact"))
+        payload = json.loads(read_text_auto_capped(path, encoding="utf-8", max_bytes=MAX_ARTIFACT_FILE_BYTES, label="json artifact"))
     except FileSizeLimitError as exc:
         errors.append(f"json_size: {relative}: {exc}")
         return None

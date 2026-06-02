@@ -13,7 +13,7 @@ from typing import Any
 from .adapters.base import AdapterStatus, append_tool_status
 from .artifact_io import write_json_artifact
 from .audit_canonical_graph import run_canonical_graph_outputs
-from .limits import FileSizeLimitError, read_bytes_capped, read_json_capped, read_text_auto_capped
+from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, read_bytes_capped, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
@@ -56,7 +56,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return read_json_capped(path, label="graph input")
+    return read_json_capped(path, max_bytes=MAX_ARTIFACT_FILE_BYTES, label="graph input")
 
 
 def evidence_map(evidence_index: dict[str, Any]) -> dict[str, list[str]]:

@@ -10,6 +10,14 @@ from typing import Any
 
 MAX_AUDIT_FILE_BYTES = 25_000_000
 MAX_MANIFEST_FILE_BYTES = 1_000_000
+#: Cap for re-reading the audit's OWN generated artifacts (FILE_INDEX / GRAPH / *_index.json). These
+#: are TRUSTED (produced by this tool) and legitimately scale with the audited repo — on a large
+#: repo the canonical ``graph.json`` can be 60MB+. The 25MB ``MAX_AUDIT_FILE_BYTES`` cap exists to
+#: bound reads of UNTRUSTED target-repo files; applying it to our own artifacts is a category error
+#: that hard-fails large-repo audits (exit 5, no REPORT.md). Own-artifact readers use this higher
+#: cap. It stays bounded (catches a runaway/corrupt artifact); truly-huge inputs are degraded
+#: gracefully by ``run_corpus``'s build-budget guard rather than read into memory.
+MAX_ARTIFACT_FILE_BYTES = 256_000_000
 
 
 class FileSizeLimitError(ValueError):
@@ -72,7 +80,14 @@ def read_text_auto_capped(
     return text
 
 
-def read_json_capped(path: Path, *, max_bytes: int = MAX_AUDIT_FILE_BYTES, label: str = "json artifact") -> Any:
+def read_json_capped(path: Path, *, max_bytes: int = MAX_ARTIFACT_FILE_BYTES, label: str = "json artifact") -> Any:
+    # NOTE: default cap is MAX_ARTIFACT_FILE_BYTES (256MB), NOT the 25MB untrusted-file cap. Every
+    # caller of this function reads the audit's OWN generated artifacts (FILE_INDEX/GRAPH/*_index.json,
+    # validation/report JSON) or local tool/host config — never a raw untrusted target-repo file
+    # (those go through read_text_capped / read_bytes_capped / read_text_auto_capped with the 25MB
+    # default). Own artifacts legitimately scale with the audited repo (graph.json can be 60MB+); the
+    # 25MB cap here was a category error that hard-failed large-repo audits. A caller reading genuinely
+    # untrusted JSON must pass an explicit small max_bytes.
     try:
         return json.loads(read_text_auto_capped(path, encoding="utf-8", max_bytes=max_bytes, label=label))
     except RecursionError as exc:

@@ -18,7 +18,7 @@ from defusedxml import ElementTree as DefusedET
 from defusedxml.common import DefusedXmlException
 
 from .artifact_io import write_json_artifact
-from .limits import FileSizeLimitError, MAX_MANIFEST_FILE_BYTES, read_json_capped, read_text_capped
+from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, MAX_MANIFEST_FILE_BYTES, read_json_capped, read_text_capped
 from .models import ARTIFACT_PATHS
 from .policy import command_tokens_from_text, decide_command
 from .sanitize import markdown_table_cell
@@ -58,7 +58,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return read_json_capped(path, label="manifest input")
+    return read_json_capped(path, max_bytes=MAX_ARTIFACT_FILE_BYTES, label="manifest input")
 
 
 def evidence_by_path(audit_dir: Path) -> dict[str, str]:

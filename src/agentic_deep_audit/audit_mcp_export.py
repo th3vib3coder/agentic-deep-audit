@@ -8,7 +8,7 @@ from typing import Any
 
 from .adapters.base import AdapterStatus, append_tool_status
 from .artifact_io import write_json_artifact
-from .limits import FileSizeLimitError, read_json_capped
+from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, read_json_capped
 from .mcp_collision_check import GENERATED_SERVER_NAME, GENERATED_TOOL_NAMES, read_host_mcp_state
 from .mcp_policy import redact_value
 from .models import ARTIFACT_PATHS
@@ -17,7 +17,7 @@ from .validate_corpus import validate_corpus_artifacts
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
-        payload = read_json_capped(path, label="mcp export input")
+        payload = read_json_capped(path, max_bytes=MAX_ARTIFACT_FILE_BYTES, label="mcp export input")
     except (OSError, FileSizeLimitError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -75,8 +75,17 @@ def corpus_is_valid(audit_dir: Path) -> tuple[bool, str | None]:
     evidence_index, evidence_error = load_required_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"], "EVIDENCE_INDEX.json")
     if evidence_index is None:
         return False, f"{evidence_error}; cannot validate corpus for MCP export"
-    if not (audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"]).exists():
+    index_path = audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"]
+    if not index_path.exists():
         return False, "CORPUS_INDEX.json missing; MCP export requires corpus"
+    corpus_index, index_error = load_required_json(index_path, "CORPUS_INDEX.json")
+    if corpus_index is None:
+        return False, f"{index_error}; cannot validate corpus for MCP export"
+    if corpus_index.get("skipped") is True:
+        # A SKIPPED corpus (FTS5 unavailable / inputs over the build budget / unreadable input) has
+        # no CORPUS.sqlite, so the agent_query MCP tool would 404 at call time. Defer the MCP export
+        # rather than advertise a dead tool — honest availability over a built config that fails.
+        return False, f"corpus skipped ({corpus_index.get('skip_reason')}); MCP audit_query unavailable"
     errors = validate_corpus_artifacts(audit_dir, evidence_index)
     if errors:
         return False, f"corpus validation failed before MCP export: {errors[0]}"

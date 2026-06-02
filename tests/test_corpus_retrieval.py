@@ -394,6 +394,168 @@ def test_corpus_skips_cleanly_when_fts5_unavailable(tmp_path: Path, monkeypatch)
     assert not (audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE"]).exists()
 
 
+def test_artifact_cap_exceeds_untrusted_file_cap() -> None:
+    # Scalability fix: own GENERATED artifacts (graph.json, *_index.json) are TRUSTED and sized by the
+    # audited repo; they must be readable above the 25MB cap that protects reads of UNTRUSTED
+    # target-repo files. Own-artifact readers use MAX_ARTIFACT_FILE_BYTES, not the untrusted cap.
+    from agentic_deep_audit.limits import MAX_ARTIFACT_FILE_BYTES, MAX_AUDIT_FILE_BYTES
+
+    assert MAX_ARTIFACT_FILE_BYTES > MAX_AUDIT_FILE_BYTES
+
+
+def test_corpus_load_json_honors_artifact_cap(tmp_path: Path, monkeypatch) -> None:
+    # load_json must read the cap at call time so the own-artifact cap governs corpus input reads,
+    # NOT the hardcoded 25MB untrusted default of read_json_capped. (OpenHuman: graph.json was 65MB.)
+    import pytest
+
+    import agentic_deep_audit.audit_corpus as corpus
+    from agentic_deep_audit.limits import FileSizeLimitError
+
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text(json.dumps({"blob": "x" * 4096}), encoding="utf-8")
+    monkeypatch.setattr(corpus, "MAX_ARTIFACT_FILE_BYTES", 256, raising=False)
+    with pytest.raises(FileSizeLimitError):
+        corpus.load_json(artifact)
+
+
+def test_corpus_skips_when_inputs_exceed_build_budget(tmp_path: Path, monkeypatch) -> None:
+    # Large-repo scalability (the OpenHuman case): when the corpus input artifacts exceed the build
+    # budget, run_corpus DEGRADES gracefully (writes CORPUS_SQLITE_SKIPPED + a skipped CORPUS_INDEX
+    # and returns) so the run completes and REPORT.md is still produced, instead of hard-failing on
+    # the file-size cap (exit 5) or hanging on a huge FTS build. A skipped corpus still validates.
+    audit_dir = run_corpus_fixture(tmp_path)
+    monkeypatch.setattr("agentic_deep_audit.audit_corpus.MAX_CORPUS_INPUT_BYTES", 1, raising=False)
+
+    run_corpus(load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]), audit_dir)
+    index = load_json(audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"])
+
+    assert index["skipped"] is True
+    assert "build budget" in index["skip_reason"]
+    assert (audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE_SKIPPED"]).exists()
+    assert not (audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE"]).exists()
+    assert validate_audit(audit_dir).ok
+
+
+def test_read_json_capped_defaults_to_artifact_cap() -> None:
+    # Keystone of the scalability fix: read_json_capped (used by every own-artifact reader, including
+    # the validate path) must default to the 256MB artifact cap, not the 25MB untrusted-file cap, so
+    # validate_audit does not turn a large own graph.json into a size-cap blocker (which withheld
+    # REPORT.md on OpenHuman).
+    import inspect
+
+    from agentic_deep_audit.limits import MAX_ARTIFACT_FILE_BYTES, read_json_capped
+
+    default = inspect.signature(read_json_capped).parameters["max_bytes"].default
+    assert default == MAX_ARTIFACT_FILE_BYTES
+
+
+def test_corpus_degrades_on_corrupt_graph_instead_of_crashing(tmp_path: Path) -> None:
+    # The corpus must DEGRADE (skip with an honest, distinct reason), not crash the run, on a corrupt
+    # own artifact — the same graceful-degradation contract the size guard provides (swarm P2).
+    audit_dir = run_corpus_fixture(tmp_path)
+    (audit_dir / ARTIFACT_PATHS["GRAPH"]).write_text("{ this is not valid json", encoding="utf-8")
+
+    run_corpus(load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]), audit_dir)
+    index = load_json(audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"])
+
+    assert index["skipped"] is True
+    assert "not valid JSON" in index["skip_reason"]
+    assert not (audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE"]).exists()
+
+
+def test_corpus_degrades_on_pathological_graph_depth(tmp_path: Path) -> None:
+    # A pathologically/adversarially deep own artifact must DEGRADE with a DISTINCT depth reason, not
+    # be mislabeled as a benign "too large" size skip. JsonDepthLimitError subclasses FileSizeLimitError,
+    # so the catch ORDER in run_corpus matters; this proves the ordering at runtime (swarm P2).
+    audit_dir = run_corpus_fixture(tmp_path)
+    deep = "[" * 50000 + "]" * 50000
+    (audit_dir / ARTIFACT_PATHS["GRAPH"]).write_text(deep, encoding="utf-8")
+
+    run_corpus(load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]), audit_dir)
+    index = load_json(audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"])
+
+    assert index["skipped"] is True
+    assert "nesting depth" in index["skip_reason"]
+    assert not (audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE"]).exists()
+
+
+def test_mcp_export_defers_when_corpus_skipped(tmp_path: Path, monkeypatch) -> None:
+    # A SKIPPED corpus has no CORPUS.sqlite, so the audit_query MCP tool would 404 at call time;
+    # run_mcp_export must DEFER (write MCP_DEFERRED), not advertise a dead tool via MCP_CONFIG (P2).
+    from agentic_deep_audit.audit_mcp_export import run_mcp_export
+
+    audit_dir = run_corpus_fixture(tmp_path)
+    monkeypatch.setattr("agentic_deep_audit.audit_corpus.MAX_CORPUS_INPUT_BYTES", 1, raising=False)
+    run_config = load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"])
+    run_corpus(run_config, audit_dir)
+    assert load_json(audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"])["skipped"] is True
+
+    run_mcp_export(run_config, audit_dir)
+
+    assert (audit_dir / ARTIFACT_PATHS["MCP_DEFERRED"]).exists()
+    assert not (audit_dir / ARTIFACT_PATHS["MCP_CONFIG"]).exists()
+    assert "skip" in (audit_dir / ARTIFACT_PATHS["MCP_DEFERRED"]).read_text(encoding="utf-8").lower()
+
+
+def test_corpus_skip_marks_rrf_capability_unavailable(tmp_path: Path, monkeypatch) -> None:
+    # Honesty (swarm P1): a skipped corpus has no DB to rank over, so the rrf / hybrid-retrieval
+    # capability must NOT be advertised as available in TOOL_STATUS — and the honest "skipped" status
+    # must NOT itself withhold REPORT.md (validate_audit stays ok, and it is not a tool failure).
+    audit_dir = run_corpus_fixture(tmp_path)
+    monkeypatch.setattr("agentic_deep_audit.audit_corpus.MAX_CORPUS_INPUT_BYTES", 1, raising=False)
+    run_config = load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"])
+    run_corpus(run_config, audit_dir)
+    assert load_json(audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"])["skipped"] is True
+
+    tool_status = load_json(audit_dir / ARTIFACT_PATHS["TOOL_STATUS"])
+    rrf_entries = [tool for tool in tool_status["tools"] if tool.get("tool") == "rrf_ranker"]
+    assert rrf_entries, "rrf_ranker status must still be recorded on the skip path"
+    latest = rrf_entries[-1]
+    assert latest["status"] == "skipped"
+    assert latest["available"] is False
+    assert latest.get("availability") != "available"
+    assert latest.get("skipped_reason")
+    assert validate_audit(audit_dir).ok
+
+
+def test_corpus_degrades_on_unreadable_input_instead_of_crashing(tmp_path: Path, monkeypatch) -> None:
+    # A corpus input that exists but raises OSError must DEGRADE (skip), not crash run_corpus. A real
+    # permission-denied artifact fails BOTH the load AND the hash that write_corpus_skipped computes
+    # via source_artifact_hashes — so we make both raise for GRAPH. Without the hash-layer guard
+    # (hash_file_or_skip) the degrade handler itself would re-raise OSError and crash (swarm P2).
+    import agentic_deep_audit.audit_corpus as corpus_mod
+
+    audit_dir = run_corpus_fixture(tmp_path)
+    run_config = load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"])
+    graph_rel = ARTIFACT_PATHS["GRAPH"]
+    real_load_json = corpus_mod.load_json
+    real_sha256_file = corpus_mod.sha256_file
+
+    def explodes_for_graph(path: Path) -> bool:
+        return Path(path).as_posix().endswith(graph_rel)
+
+    def exploding_load_json(path: Path):
+        if explodes_for_graph(path):
+            raise OSError("simulated unreadable corpus input")
+        return real_load_json(path)
+
+    def exploding_sha256_file(path: Path):
+        if explodes_for_graph(path):
+            raise PermissionError("simulated unreadable corpus input")
+        return real_sha256_file(path)
+
+    monkeypatch.setattr(corpus_mod, "load_json", exploding_load_json)
+    monkeypatch.setattr(corpus_mod, "sha256_file", exploding_sha256_file)
+    corpus_mod.run_corpus(run_config, audit_dir)  # must NOT raise even though read AND hash fail
+
+    index = real_load_json(audit_dir / ARTIFACT_PATHS["CORPUS_INDEX"])
+    assert index["skipped"] is True
+    assert "could not be read" in index["skip_reason"]
+    assert not (audit_dir / ARTIFACT_PATHS["CORPUS_SQLITE"]).exists()
+    # the unreadable GRAPH is omitted from the source-hash map (degraded, not crashed, not a fake hash)
+    assert graph_rel not in index["source_artifact_hashes"]
+
+
 def test_corpus_skipped_branch_logs_rrf_override_and_validates_strictly(tmp_path: Path, monkeypatch) -> None:
     repo = copy_fixture(tmp_path, "performance_quality_project")
     config = {

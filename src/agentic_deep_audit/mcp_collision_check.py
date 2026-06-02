@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .limits import FileSizeLimitError, read_json_capped
+from .limits import FileSizeLimitError, MAX_MANIFEST_FILE_BYTES, read_json_capped
 from .mcp_policy import redact_value
 
 
@@ -171,7 +171,7 @@ def read_host_mcp_state(run_config: dict[str, Any]) -> dict[str, Any]:
             host_errors.append(path_error)
             continue
         try:
-            payload = read_json_capped(path, label="host MCP config")
+            payload = read_json_capped(path, max_bytes=MAX_MANIFEST_FILE_BYTES, label="host MCP config")
         except (OSError, FileSizeLimitError, json.JSONDecodeError) as exc:
             host_errors.append(f"host MCP config parse failed: {safe_path_text(path)}: {type(exc).__name__}")
             continue

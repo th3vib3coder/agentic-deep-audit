@@ -9,7 +9,7 @@ from typing import Any
 
 from .audit_evidence import sha256_range
 from .audit_validate_common import ValidationResult, load_json
-from .limits import FileSizeLimitError, read_bytes_capped, read_text_auto_capped, resolve_repo_file
+from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, read_bytes_capped, read_text_auto_capped, resolve_repo_file
 from .mcp_policy import looks_secret
 from .models import ARTIFACT_PATHS
 
@@ -186,7 +186,7 @@ def validate_cross_artifact_evidence_references(audit_dir: Path, evidence_index:
         if path.resolve() == evidence_index_path:
             continue
         try:
-            payload = json.loads(read_text_auto_capped(path, encoding="utf-8", label="cross-artifact JSON"))
+            payload = json.loads(read_text_auto_capped(path, encoding="utf-8", max_bytes=MAX_ARTIFACT_FILE_BYTES, label="cross-artifact JSON"))
         except FileSizeLimitError as exc:
             errors.append(f"{relative} exceeds validation size cap: {exc}")
             continue

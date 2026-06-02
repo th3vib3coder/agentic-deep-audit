@@ -14,7 +14,7 @@ from typing import Any
 
 from .adapters.base import AdapterStatus, adapter_subprocess_env, append_tool_status
 from .adapters.loader import AdapterBlockedPrePromotion, validate_adapter_promotion
-from .limits import FileSizeLimitError, read_json_capped
+from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, read_json_capped
 from .mcp_policy import redact_value
 from .models import ARTIFACT_PATHS, PLUGIN_ROOT
 from .policy import append_blocked_attempt, decide_command
@@ -28,7 +28,7 @@ def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        payload = read_json_capped(path, label="graph renderer input")
+        payload = read_json_capped(path, max_bytes=MAX_ARTIFACT_FILE_BYTES, label="graph renderer input")
     except (OSError, FileSizeLimitError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}

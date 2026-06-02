@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .limits import MAX_AUDIT_FILE_BYTES, FileSizeLimitError, decode_text_bytes, read_bytes_capped, read_text_auto_capped, resolve_repo_file
+from .limits import MAX_ARTIFACT_FILE_BYTES, MAX_AUDIT_FILE_BYTES, FileSizeLimitError, decode_text_bytes, read_bytes_capped, read_text_auto_capped, resolve_repo_file
 from .artifact_io import write_json_artifact
 from .models import ARTIFACT_PATHS
 
@@ -150,7 +150,7 @@ def sync_evidence_identity_from_provenance(audit_dir: Path, provenance: dict[str
     evidence_path = audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]
     if not evidence_path.exists():
         return
-    evidence_index = json.loads(read_text_auto_capped(evidence_path, encoding="utf-8", label="evidence index"))
+    evidence_index = json.loads(read_text_auto_capped(evidence_path, encoding="utf-8", max_bytes=MAX_ARTIFACT_FILE_BYTES, label="evidence index"))
     git = provenance.get("git") if isinstance(provenance.get("git"), dict) else {}
     repo = evidence_index.setdefault("repo", {})
     if git.get("commit"):

@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .audit_corpus import query_corpus, redact_text
-from .limits import FileSizeLimitError, read_text_auto_capped
+from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, read_text_auto_capped
 from .mcp_collision_check import GENERATED_TOOL_NAMES
 from .models import ARTIFACT_PATHS
 
@@ -154,7 +154,7 @@ def graph_neighbors(audit_dir: Path, node_id: str) -> dict[str, Any]:
         return {"node_id": node_id, "neighbors": [], "truncated": False}
     try:
         graph_path = resolve_audit_artifact(audit_dir, ARTIFACT_PATHS["GRAPH"])
-        graph = json.loads(read_text_auto_capped(graph_path, encoding="utf-8", label="mcp graph")) if graph_path.exists() else {"nodes": [], "edges": []}
+        graph = json.loads(read_text_auto_capped(graph_path, encoding="utf-8", max_bytes=MAX_ARTIFACT_FILE_BYTES, label="mcp graph")) if graph_path.exists() else {"nodes": [], "edges": []}
     except PermissionError:
         raise
     except (FileSizeLimitError, OSError, json.JSONDecodeError) as exc:
