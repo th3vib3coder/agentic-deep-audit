@@ -56,6 +56,32 @@ def evidence_from_text(text: str) -> list[str]:
     return sorted(set(EVIDENCE_RE.findall(text)))
 
 
+def wiki_frontmatter_evidence_ids(text: str) -> list[str]:
+    # FIX-GRAPHVAL (2026-06-03): a wiki page's canonical-graph evidence must come from its DECLARED
+    # frontmatter `evidence_ids` list, NOT a blanket ev-\d{6,} regex over the whole page. A page slug/title
+    # can contain a coincidental "ev-NNNNNN" substring (e.g. a slug truncating "...everywhere" to "...-ev"
+    # plus an 8-digit disambiguation hash -> "ev-28563836", or a symbol name "_ev_123456"), which the blanket
+    # regex harvested as a PHANTOM evidence reference -> "unreachable evidence id" blocker (hermes-agent).
+    # (Mirrors audit_corpus.trusted_wiki_evidence_ids; kept local to avoid a cross-module import cycle.)
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if not line.startswith("evidence_ids:"):
+            continue
+        raw_value = line.split(":", 1)[1].strip()
+        try:
+            values = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(values, list):
+            return []
+        return sorted({str(item) for item in values if isinstance(item, str) and EVIDENCE_RE.fullmatch(item)})
+    return []
+
+
 def split_markdown_row(line: str) -> list[str]:
     stripped = line.strip()
     if not stripped.startswith("|"):
@@ -193,12 +219,22 @@ def add_module_and_symbol_nodes(
     for edge in module_graph.get("edges", []) if isinstance(module_graph.get("edges"), list) else []:
         if not isinstance(edge, dict) or not edge.get("source") or not edge.get("target"):
             continue
+        target = str(edge["target"])
+        edge_evidence = [str(item) for item in edge.get("evidence_ids", []) if isinstance(item, str)]
+        # FIX-GRAPHVAL (2026-06-03): a module-graph edge target that never became a node -- notably the
+        # dynamic-import placeholder package:<dynamic> (resolve_import_target returns it for un-resolvable
+        # imports), and any package:* absent from the module-graph node list -- was silently DROPPED by
+        # build_canonical_graph's endpoint filter, making derivations.dropped_edge_count>0 AND the edge
+        # "missing expected" (both validation blockers; hermes-agent). Materialise an artifact node for such
+        # targets so the dynamic/package dependency edge is preserved.
+        if target not in nodes:
+            add_node(nodes, target, "artifact", target, edge_evidence, artifact_kind="dependency")
         add_edge(
             edges,
             str(edge["source"]),
-            str(edge["target"]),
+            target,
             "depends_on",
-            [str(item) for item in edge.get("evidence_ids", []) if isinstance(item, str)],
+            edge_evidence,
             weight=float(edge.get("weight") or 1.0),
             conditional=bool(edge.get("conditional")),
             dynamic=bool(edge.get("dynamic")),
@@ -249,12 +285,18 @@ def markdown_table_rows(path: Path) -> list[tuple[str, list[str]]]:
     return rows
 
 
+def available_evidence_ids(audit_dir: Path) -> set[str]:
+    index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"])
+    return {str(item.get("id")) for item in index.get("evidence", []) if isinstance(item, dict) and item.get("id")}
+
+
 def add_markdown_concept_nodes(
     audit_dir: Path,
     nodes: dict[str, dict[str, Any]],
     edges: dict[tuple[str, str, str], dict[str, Any]],
     source_artifacts: set[str],
 ) -> None:
+    available = available_evidence_ids(audit_dir)
     for key, node_type, edge_type in [("FEATURE_CATALOG", "feature", "implements"), ("PATTERNS", "pattern", "implements")]:
         artifact = ARTIFACT_PATHS[key]
         path = audit_dir / artifact
@@ -262,9 +304,16 @@ def add_markdown_concept_nodes(
             continue
         source_artifacts.add(artifact)
         for label, evidence_ids in markdown_table_rows(path):
+            # FIX-GRAPHVAL (2026-06-03, swarm follow-up): filter the row's regex-harvested ids against the
+            # REAL evidence index (mirroring the wiki generator's `if match in available` guard). A blanket
+            # ev-\d{6,} harvest over the whole row also matches a coincidental substring in a PATH/label cell
+            # (e.g. `src/dev-123456/x.py` -> phantom `ev-123456`) that the cell sanitizer does not escape when
+            # there is no word boundary -- a phantom reference that would block REPORT.md. Same bug class as
+            # the wiki-slug phantom (Fix B). Empty available (no index / unit test) keeps all (fail-safe).
+            clean_evidence = [eid for eid in evidence_ids if not available or eid in available]
             node_id = f"{node_type}:{stable_slug(label)}"
-            add_node(nodes, node_id, node_type, label, evidence_ids, source_artifact=artifact)
-            add_edge(edges, REPO_NODE_ID, node_id, edge_type, evidence_ids)
+            add_node(nodes, node_id, node_type, label, clean_evidence, source_artifact=artifact)
+            add_edge(edges, REPO_NODE_ID, node_id, edge_type, clean_evidence)
 
 
 def add_risk_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: dict[tuple[str, str, str], dict[str, Any]], source_artifacts: set[str]) -> None:
@@ -311,7 +360,7 @@ def add_wiki_nodes(audit_dir: Path, nodes: dict[str, dict[str, Any]], edges: dic
             text = read_text_auto_capped(path, encoding="utf-8", errors="replace", label="canonical graph wiki")
         except (OSError, FileSizeLimitError):
             continue
-        evidence_ids = evidence_from_text(text)
+        evidence_ids = wiki_frontmatter_evidence_ids(text)
         node_id = artifact_node_id(f"wiki:{relative}")
         add_node(nodes, node_id, "artifact", relative, evidence_ids, artifact_kind="wiki_page", path=relative)
         add_edge(edges, node_id, REPO_NODE_ID, "documents", evidence_ids)

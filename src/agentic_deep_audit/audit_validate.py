@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,6 @@ from .bootstrap import PHASES
 from .config import sha256_file
 from .limits import FileSizeLimitError, is_safe_repo_relative_path, read_bytes_capped, read_text_auto_capped, resolve_repo_file, sha256_file_capped
 from .audit_inventory import KIND_VALUES
-from .mcp_policy import looks_secret
 from .models import ARTIFACT_PATHS
 from .validate_extensions import extension_artifacts_present, validate_extension_artifacts
 
@@ -387,8 +387,19 @@ def validate_graph_artifacts(audit_dir: Path) -> ValidationResult:
             for key in ["type", "weight", "conditional", "dynamic", "evidence_ids"]:
                 if key not in edge:
                     errors.append(f"MODULE_GRAPH.json edge {index} missing {key}")
-            if edge.get("conditional") is True and float(edge.get("weight", 0)) > 0.5:
-                errors.append(f"conditional graph edge has non-conservative weight: {edge.get('source')} -> {edge.get('target')}")
+            edge_weight = edge.get("weight")
+            if (isinstance(edge_weight, bool) or not isinstance(edge_weight, (int, float))
+                    or not math.isfinite(edge_weight) or edge_weight < 0):
+                errors.append(f"MODULE_GRAPH.json edge {index} weight must be a finite non-negative number")
+        # FIX-GRAPHVAL (2026-06-03): replaced the per-edge "conditional weight > 0.5" cap with the finite
+        # non-negative weight guard above (swarm review). The conservatism of
+        # conditional import edges is enforced by the per-site DISCOUNT (conditional_import_weight <
+        # normal_import_weight), NOT by an absolute cap on the SUMMED weight. B03 deliberately accumulates the
+        # per-site 0.5 weights across distinct import sites so centrality reflects import frequency
+        # (test_b03_distinct_import_sites_accumulate_weight), so a module imported conditionally N times
+        # legitimately reaches weight 0.5*N (>0.5 for N>=2). The old cap also hardcoded 0.5 while the per-site
+        # weight is configurable (e.g. 0.25). It false-blocked REPORT.md on real repos with repeated
+        # try/except provider imports (hermes-agent: 178 conditional edges, all legitimate 0.5-multiples).
         centrality = module_graph.get("centrality")
         if not isinstance(centrality, dict):
             errors.append("MODULE_GRAPH.json missing centrality object")

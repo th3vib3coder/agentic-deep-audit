@@ -150,7 +150,17 @@ def validate_page(audit_dir: Path, path: Path, available_evidence: set[str], ava
         errors.append(f"{relative} observed page lacks frontmatter evidence ids")
     if status == "skipped" and "skipped:" not in text and "Open Questions" not in text:
         errors.append(f"{relative} skipped page lacks skipped/open-question note")
-    for evidence_id in re.findall(r"ev-\d{6,}", text):
+    # FIX-GRAPHVAL (2026-06-03): scan only the BODY (the frontmatter `slug:` can carry a coincidental
+    # "ev-NNNNNN" substring) and strip markdown link TARGETS (cross-references to such slugs) before
+    # harvesting inline evidence refs, so a slug/link substring is not mis-flagged as an unreachable
+    # evidence citation (hermes-agent). Declared frontmatter evidence_ids are validated above; genuine
+    # inline prose citations are still validated here.
+    body = text.split("\n---\n", 1)[1] if text.startswith("---") and "\n---\n" in text else text
+    # Strip inline link targets `](...)` AND reference-style link definitions `[id]: target` (Codex packet-108
+    # note: same class) so a slug substring inside a link path is not mis-read as an evidence citation.
+    body_without_link_targets = re.sub(r"\]\([^)]*\)", "]()", body)
+    body_without_link_targets = re.sub(r"(?m)^\s*\[[^\]]+\]:\s*\S+", "", body_without_link_targets)
+    for evidence_id in re.findall(r"ev-\d{6,}", body_without_link_targets):
         if evidence_id not in available_evidence:
             errors.append(f"{relative} body references unreachable evidence id: {evidence_id}")
     validate_links(audit_dir, path, text, available_targets, errors)

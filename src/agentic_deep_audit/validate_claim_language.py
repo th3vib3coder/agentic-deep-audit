@@ -26,6 +26,19 @@ def line_is_scoped(line: str) -> bool:
     return any(token in lowered for token in SCOPE_QUALIFIERS + NEGATED_CLAIM_MARKERS)
 
 
+def strip_quoted_table_cells(line: str) -> str:
+    # FIX-GRAPHVAL (2026-06-03, hardened after swarm review): only the CONTENT of a markdown TABLE CELL that
+    # is a blockquote (cell text starts with `>`) is target-repo text quoted as evidence -- the perf/quality
+    # reviews embed target excerpts via sanitize_markdown's `> ` wrapping inside a table cell. Drop ONLY those
+    # cells before scanning, so a target's absolute wording is not attributed to the audit, while the audit's
+    # OWN claims -- in OTHER cells of the same row, or in prose (including prose blockquotes in the
+    # agent-authored REPORT.md) -- are STILL scanned. (An earlier whole-line skip let an audit overclaim evade
+    # via any `>`-prefixed line; the real hermes-agent FP was specifically a `| ... | > <target excerpt> |` row.)
+    if "|" not in line:
+        return line
+    return "|".join(cell for cell in line.split("|") if not cell.strip().startswith(">"))
+
+
 def validate_anti_overclaim_language(audit_dir: Path) -> list[str]:
     errors: list[str] = []
     for key in FINAL_TEXT_KEYS:
@@ -39,8 +52,14 @@ def validate_anti_overclaim_language(audit_dir: Path) -> list[str]:
             errors.append(f"anti_overclaim: {relative}: invalid artifact: {exc}")
             continue
         for number, line in enumerate(text.splitlines(), start=1):
-            if line_is_scoped(line):
+            # FIX-GRAPHVAL (2026-06-03, Codex REDIRECT on packet 108): strip the quoted target cells FIRST,
+            # then apply BOTH the scope-qualifier check AND the absolute-claim check to the audit's OWN
+            # remaining content. Otherwise a scope qualifier (`scope`/`coverage`/`within the analyzed`/...)
+            # that happens to appear INSIDE a `>`-quoted target excerpt would suppress the WHOLE line and let
+            # an unscoped audit claim in ANOTHER cell of the same row evade the gate.
+            scan_target = strip_quoted_table_cells(line)
+            if line_is_scoped(scan_target):
                 continue
-            if any(pattern.search(line) for pattern in ABSOLUTE_PATTERNS):
+            if any(pattern.search(scan_target) for pattern in ABSOLUTE_PATTERNS):
                 errors.append(f"anti_overclaim: {relative}:{number}: absolute claim must be scoped by coverage/profile")
     return errors
