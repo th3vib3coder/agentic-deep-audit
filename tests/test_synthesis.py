@@ -95,6 +95,90 @@ def test_synthesis_preserves_baseline_and_generates_evidence_backed_outputs(tmp_
     assert validate_audit(audit_dir).ok
 
 
+def test_special_implementations_excludes_tests_and_ranks_by_centrality(tmp_path: Path) -> None:
+    # Decision-grade reuse regression (observed on Lum1104/Understand-Anything): the candidate cap was
+    # filled by the FIRST symbols in index order — which are often a test file's symbols — crowding out
+    # every production component (Adopt/Adapt/Study ended up empty, Avoid = 20 test classes). The
+    # generator must EXCLUDE test-file symbols and rank the rest by module centrality, so reuse
+    # candidates are the most-depended-on PRODUCTION components.
+    from agentic_deep_audit.audit_synthesis import build_special_implementations
+
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).write_text(json.dumps({"run_id": "run-rank"}), encoding="utf-8")
+    (audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]).write_text(json.dumps({"evidence": [{"id": "ev-000001", "path": "src/high.py"}]}), encoding="utf-8")
+    # FILE_INDEX marks the test file kind=test (authoritative) and production files kind=code.
+    (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).write_text(
+        json.dumps({"records": [
+            {"path": "tests/test_thing.py", "kind": "test"},
+            {"path": "src/high.py", "kind": "code"},
+            {"path": "src/low.py", "kind": "code"},
+            {"path": "src/hub.ts", "kind": "code"},
+        ]}),
+        encoding="utf-8",
+    )
+    # 21 test symbols FIRST (would exhaust a 20 cap in index order), then 3 production symbols — one of
+    # which is a TS-style `export` (the dominant symbol kind in TS/JS/Go repos) and the most central.
+    test_syms = [
+        {"name": f"TestCase{i:02d}", "path": "tests/test_thing.py", "kind": "class", "public": True, "evidence_ids": ["ev-000001"], "span": {"start_line": i + 1}}
+        for i in range(21)
+    ]
+    prod_syms = [
+        {"name": "HighValue", "path": "src/high.py", "kind": "class", "public": True, "evidence_ids": ["ev-000001"], "span": {"start_line": 1}},
+        {"name": "LowValue", "path": "src/low.py", "kind": "function", "public": True, "evidence_ids": ["ev-000001"], "span": {"start_line": 1}},
+        {"name": "ExportedHub", "path": "src/hub.ts", "kind": "export", "public": True, "evidence_ids": ["ev-000001"], "span": {"start_line": 1}},
+    ]
+    symbol_index = {"symbols": test_syms + prod_syms}
+    module_graph = {"edges": [], "centrality": {
+        "module:src/hub.ts": {"algorithm": "weighted_in_degree", "rank": 1, "score": 20.0},
+        "module:src/high.py": {"algorithm": "weighted_in_degree", "rank": 2, "score": 9.0},
+        "module:src/low.py": {"algorithm": "weighted_in_degree", "rank": 3, "score": 1.0},
+        "module:tests/test_thing.py": {"algorithm": "weighted_in_degree", "rank": 4, "score": 0.0},
+    }}
+
+    build_special_implementations(audit_dir, symbol_index, module_graph, {"ev-000001"})
+
+    special = load_json(audit_dir / ARTIFACT_PATHS["SPECIAL_IMPLEMENTATIONS"])
+    files = {f for candidate in special["candidates"] for f in candidate["files"]}
+    names = [candidate["name"] for candidate in special["candidates"]]
+    assert "tests/test_thing.py" not in files, "test-file symbols must be excluded from reuse candidates"
+    assert {"src/high.py", "src/low.py", "src/hub.ts"} <= files, "production components (incl. exported TS/JS symbols) must reach the candidate set"
+    assert names[0] == "ExportedHub", "candidates must be ranked by module centrality across languages (most depended-on export/function first)"
+    assert special["total_eligible"] == 3 and special["truncated"] is False, "non-test eligible count is surfaced and not truncated below the cap"
+
+
+def test_is_test_path_excludes_tests_not_production_spec_or_testing_dirs() -> None:
+    # Over-exclusion guard (swarm P2): the heuristic must catch genuine tests in any language WITHOUT
+    # dropping production code that merely lives under a `spec/` (OpenAPI) or `testing/` (library) dir.
+    from agentic_deep_audit.audit_synthesis import is_test_path
+
+    for genuine_test in ["tests/foo.py", "pkg/__tests__/x.ts", "src/foo.test.ts", "src/foo.spec.ts", "pkg/foo_test.go", "test_foo.py", "spec/models/user_spec.rb"]:
+        assert is_test_path(genuine_test), genuine_test
+    for production in ["spec/openapi.yaml", "specs/api/users.json", "src/testing/factory.ts", "src/attestation.ts", "pkg/contest.go", "src/latest.py", "api/spec/schema.ts"]:
+        assert not is_test_path(production), production
+
+
+def test_special_implementations_records_truncation(tmp_path: Path) -> None:
+    # Transparency (swarm P0): when more components are eligible than the cap, the artifact must record
+    # total_eligible + truncated, and a reviewer-facing open question must be returned (not silently cut).
+    from agentic_deep_audit.audit_synthesis import build_special_implementations
+
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).write_text(json.dumps({"run_id": "run-trunc"}), encoding="utf-8")
+    (audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"]).write_text(json.dumps({"evidence": [{"id": "ev-000001", "path": "src/m.py"}]}), encoding="utf-8")
+    (audit_dir / ARTIFACT_PATHS["FILE_INDEX"]).write_text(json.dumps({"records": [{"path": "src/m.py", "kind": "code"}]}), encoding="utf-8")
+    syms = [{"name": f"C{i:02d}", "path": "src/m.py", "kind": "function", "public": True, "evidence_ids": ["ev-000001"], "span": {"start_line": i + 1}} for i in range(25)]
+
+    questions = build_special_implementations(audit_dir, {"symbols": syms}, {"edges": [], "centrality": {}}, {"ev-000001"})
+
+    special = load_json(audit_dir / ARTIFACT_PATHS["SPECIAL_IMPLEMENTATIONS"])
+    assert special["total_eligible"] == 25
+    assert special["truncated"] is True
+    assert len(special["candidates"]) == 20
+    assert any("truncated" in q.lower() for q in questions), "a truncation open-question must be surfaced"
+
+
 def test_synthesis_flags_evidence_linkage_gap_instead_of_silent_skip(tmp_path: Path) -> None:
     # C6-04: structural artifacts present but with no reachable evidence id must be surfaced as an
     # evidence-linkage gap, not a bare "skipped" that contradicts the visible module count.

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from agentic_deep_audit.audit_validate import validate_audit
-from agentic_deep_audit.audit_wiki import decision_paths, markdown_text, run_wiki, stable_slug, write_page, write_table_category
+from agentic_deep_audit.audit_wiki import decision_paths, run_wiki, stable_slug, write_page, write_table_category
 from agentic_deep_audit.models import ARTIFACT_PATHS, PLUGIN_ROOT
 from agentic_deep_audit.validate_wiki import REQUIRED_FRONTMATTER, parse_frontmatter
 
@@ -287,6 +287,30 @@ def test_corpus_hashes_wiki_source_artifacts(tmp_path: Path) -> None:
     broken_reuse = validate_audit(audit_dir)
     assert not broken_reuse.ok
     assert any("source_artifact_hashes drift" in error for error in broken_reuse.errors)
+
+
+def test_wiki_link_validation_computes_targets_once(tmp_path: Path, monkeypatch) -> None:
+    # Perf regression (OpenHuman 30k-page repo hung validate_audit ~30 min): the obsidian link-target
+    # set must be computed ONCE per validation, not recomputed inside validate_links for every page
+    # (each call does a full wiki rglob -> O(pages^2)). Counting calls is a deterministic O(N) proxy.
+    import agentic_deep_audit.validate_wiki as vw
+
+    audit_dir = run_wiki_fixture(tmp_path)
+    evidence_index = load_json(audit_dir / ARTIFACT_PATHS["EVIDENCE_INDEX"])
+    page_count = len(list((audit_dir / "wiki").rglob("*.md")))
+    assert page_count > 1
+
+    calls = {"n": 0}
+    real_obsidian_targets = vw.obsidian_targets
+
+    def counting(audit_dir_arg: Path) -> set[str]:
+        calls["n"] += 1
+        return real_obsidian_targets(audit_dir_arg)
+
+    monkeypatch.setattr(vw, "obsidian_targets", counting)
+    vw.validate_wiki_artifacts(audit_dir, evidence_index)
+
+    assert calls["n"] <= 1, f"obsidian_targets recomputed per page (O(N^2)): {calls['n']} calls over {page_count} pages"
 
 
 def test_wiki_validator_requires_category_and_decision_pages(tmp_path: Path) -> None:

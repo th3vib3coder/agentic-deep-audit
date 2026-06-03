@@ -87,7 +87,7 @@ def obsidian_targets(audit_dir: Path) -> set[str]:
     return result
 
 
-def validate_links(audit_dir: Path, path: Path, text: str, errors: list[str]) -> None:
+def validate_links(audit_dir: Path, path: Path, text: str, available_targets: set[str], errors: list[str]) -> None:
     for match in MARKDOWN_LINK.finditer(text):
         target = match.group(1).strip()
         if target.startswith(("http://", "https://", "mailto:")):
@@ -105,12 +105,11 @@ def validate_links(audit_dir: Path, path: Path, text: str, errors: list[str]) ->
                 continue
         if target_path and not resolved.exists():
             errors.append(f"{path.relative_to(audit_dir).as_posix()} has broken markdown link: {target}")
-    available = obsidian_targets(audit_dir)
     for match in OBSIDIAN_LINK.finditer(text):
         target = match.group(1).strip()
         if not safe_markdown_target(target):
             errors.append(f"{path.relative_to(audit_dir).as_posix()} has unsafe obsidian link: {target}")
-        elif target not in available:
+        elif target not in available_targets:
             errors.append(f"{path.relative_to(audit_dir).as_posix()} has broken obsidian link: {target}")
 
 
@@ -123,7 +122,7 @@ def type_matches_directory(relative: str, page_type: str) -> bool:
     return True
 
 
-def validate_page(audit_dir: Path, path: Path, available_evidence: set[str], errors: list[str]) -> None:
+def validate_page(audit_dir: Path, path: Path, available_evidence: set[str], available_targets: set[str], errors: list[str]) -> None:
     relative = path.relative_to(audit_dir).as_posix()
     try:
         text = read_text_auto_capped(path, encoding="utf-8", label="wiki page").replace("\r\n", "\n").replace("\r", "\n")
@@ -154,7 +153,7 @@ def validate_page(audit_dir: Path, path: Path, available_evidence: set[str], err
     for evidence_id in re.findall(r"ev-\d{6,}", text):
         if evidence_id not in available_evidence:
             errors.append(f"{relative} body references unreachable evidence id: {evidence_id}")
-    validate_links(audit_dir, path, text, errors)
+    validate_links(audit_dir, path, text, available_targets, errors)
 
 
 def validate_frontmatter_types(audit_dir: Path, path: Path, front: dict[str, Any], errors: list[str]) -> None:
@@ -236,8 +235,12 @@ def validate_wiki_artifacts(audit_dir: Path, evidence_index: dict[str, Any]) -> 
             if not any(re.search(r"ev-\d{6,}", text) for text in decision_texts):
                 errors.append("wiki decisions pages require evidence or explicit skipped note")
     available = {str(item.get("id")) for item in evidence_index.get("evidence", []) if isinstance(item, dict) and item.get("id")}
+    # Compute the obsidian link-target set ONCE (it does a full wiki rglob). Previously validate_links
+    # recomputed it per page, making wiki validation O(pages^2) with a full filesystem walk each time —
+    # ~30k pages on a large repo hung validate_audit for 30+ min before REPORT.md.
+    available_targets = obsidian_targets(audit_dir)
     for path in wiki_pages(audit_dir):
-        validate_page(audit_dir, path, available, errors)
+        validate_page(audit_dir, path, available, available_targets, errors)
     run_config = load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"], errors)
     validate_wiki_coverage(audit_dir, run_config, available, errors)
     return errors

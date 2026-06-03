@@ -11,8 +11,20 @@ from .limits import FileSizeLimitError, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
 
 
+# Tokens that flag a line as a SCIENTIFIC claim requiring a provenance record. Agentic Deep Audit is a
+# GENERAL-PURPOSE repo auditor, so this set is restricted to identifiers/terms that are unambiguously
+# scientific (genome builds, sequence/accession IDs, DOI/PMID, genomics-specific units). Generic words
+# that also occur constantly in ordinary software were REMOVED — `normalization` (path/payload/UI status
+# normalization), `seed`/`random_seed`, `dataset_path`/`data_path`, `batch_key`, and the ambiguous
+# acronyms `TPM`/`CPM` — because on a general repo they false-positive on feature wiki pages and wrongly
+# BLOCK REPORT.md (observed: a large agent repo whose feature pages mention "...normalization").
+# ACCEPTED RESIDUAL (swarm review 2026-06-03, operator scope decision): audit_scientific.py still
+# EXTRACTS records for these removed categories (parameters_and_seeds, normalization_assumptions,
+# batch_confounder_model), so the underlying signals remain available for human review; only the
+# prose-citation gate is relaxed for them. A genuine but un-cited claim that uses ONLY a removed generic
+# term is therefore not flagged — accepted as a backstop residual to avoid the general-repo FP above.
 SCIENTIFIC_CLAIM_PATTERN = re.compile(
-    r"\b(GRCh\d+|hg\d+|GENCODE|RefSeq|organism|taxon|random[_ -]?seed|seed\s*[:=]|confounder|covariate|batch[_ -]?key|batch correction|normalization|TPM|CPM|log1p|dataset[_ -]?path|data[_ -]?path|GS[EM]\d{3,}|SR[RX]\d{3,}|PRJEB\d{3,}|ERR\d{3,}|PRJNA\d{3,}|UniProt(?:KB)?|PMID\s*[:=]?\s*\d{6,9}|10\.\d{4,9}/[-._;()/:A-Z0-9]+)\b",
+    r"\b(GRCh\d+|hg\d+|GENCODE|RefSeq|organism|taxon|confounder|covariate|batch correction|log1p|GS[EM]\d{3,}|SR[RX]\d{3,}|PRJEB\d{3,}|ERR\d{3,}|PRJNA\d{3,}|UniProt(?:KB)?|PMID\s*[:=]?\s*\d{6,9}|10\.\d{4,9}/[-._;()/:A-Z0-9]+)\b",
     flags=re.IGNORECASE,
 )
 

@@ -86,6 +86,22 @@ def test_looks_secret_ignores_code_and_markup_high_entropy_tokens() -> None:
         'expect(result.data!.nodes[1].type).toBe("flow")',
         "oldFp.classes[0].properties",
         'any).nodes[0].summary).toBe("index.ts")',
+        # Word-structured code/path identifiers are NOT secrets. Observed FPs that withheld REPORT.md:
+        # a COLMAP-loader function name on trianglesplatting2, and numbered Pascal_snake pipeline-stage
+        # directory names on cpath-ukk/SPARK (these have >=2 digits + >=2 capitals yet are plainly code).
+        "read_points3D_binary",
+        "symbol:scene/colmap_loader.py:function:read_points3D_binary:134",
+        "GaussianModel3DRenderer",
+        "01_Hovernext_Cleaning_Preprocessing",
+        "02_WSI_Evaluation_Pipeline",
+        "Single_cell_analytical_pipeline/03_Tumor_Center_Invasion_Front",
+        "main_PROGN_EVAL_P2_ANALYSIS",  # SCREAMING_SNAKE: words are UPPERCASE ("ANALYSIS"), lowercase part short
+        "artifact:file:Generative_and_Prognostic_Pipeline/main_PROGN_EVAL_P2_ANALYSIS.py",
+        # Digit-bearing camelCase identifiers have no _/- to split on, so they are excluded by
+        # WORD-COVERAGE (most chars sit in long same-case letter runs), not by fragmentation.
+        "convertUTF8ToUTF16Buffer",
+        "Vector3DTransformMatrix",
+        "BatchNormalization2DLayer",
     ]
     flagged = [value for value in non_secrets if looks_secret(value)]
     assert flagged == [], f"code/markup wrongly flagged as secret: {flagged}"
@@ -93,6 +109,26 @@ def test_looks_secret_ignores_code_and_markup_high_entropy_tokens() -> None:
     assert looks_secret("aB3dE5fG7hI9jK1lM2nO4pQ6")
     assert looks_secret("ghp_abcdefghijklmnopQRST")
     assert looks_secret("AKIAABCDEFGHIJKLMNOP")
+
+
+def test_entropy_backstop_flags_unprefixed_opaque_secrets_with_coincidental_word_runs() -> None:
+    # FIX-SECRET-FP hardening (adversarial swarm review, 2026-06-03): the prior "longest same-case
+    # letter run < 6" identifier guard silently LEAKED 12-21% of random class-mixed secrets — any token
+    # that happened to contain one >=6 same-case substring (a coincidental ALLCAPS/lowercase word) was
+    # wrongly treated as an identifier and NOT redacted. These are realistic UNPREFIXED tokens (no
+    # provider prefix, so SECRET_PATTERNS does NOT cover them) that the backstop MUST still redact. The
+    # WORD-COVERAGE heuristic (a secret is mostly NOT covered by >=5 same-case letter runs) restores
+    # detection while keeping the word-built identifiers above excluded. Without this test the
+    # regression is invisible: the other positive guard uses a perfectly class-alternating token.
+    must_flag = [
+        "X7gPASSWORDqz4Tm9Lf2Vn8Rk1Wd5Yb3",   # coincidental ALLCAPS word "PASSWORD" inside a random token
+        "aB3ABCDEFcd9eF1gH2iJ3kL4",            # coincidental 6-char run "ABCDEF"
+        "X7abcdefQ3R9tZ1mK4pL2nB8vC6wD0xY",    # coincidental 6-char run "abcdef"
+        "aB3ANALYSISk9Lf2Vn8Rk1Wd5Yb3xQ7z",    # coincidental word "ANALYSIS"
+        "aB3-dE5_fG7hI9jK1-lM2nO_4pQ6rST",     # base64url-style secret (-/_ kept in the run alphabet)
+    ]
+    leaked = [value for value in must_flag if not looks_secret(value)]
+    assert leaked == [], f"unprefixed opaque secrets leaked past entropy backstop: {leaked}"
 
 
 def test_looks_secret_detects_opaque_secrets_with_surrounding_punctuation() -> None:

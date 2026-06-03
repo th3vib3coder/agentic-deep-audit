@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
@@ -268,8 +267,41 @@ def license_status_source(audit_dir: Path, available: set[str]) -> str:
     return "unknown_requires_license_card"
 
 
-def build_special_implementations(audit_dir: Path, symbol_index: dict[str, Any], module_graph: dict[str, Any], available: set[str]) -> None:
-    candidates: list[dict[str, Any]] = []
+MAX_REUSE_CANDIDATES = 20
+
+#: Directory names that unambiguously mark a TEST tree. Kept deliberately NARROW: `spec`/`specs`/
+#: `testing` are intentionally NOT included because they also name PRODUCTION dirs (OpenAPI `spec/`,
+#: a library literally named `testing`); the test-file NAME patterns below carry those cases
+#: (incl. `_spec` for RSpec). Complements the authoritative FILE_INDEX ``kind == "test"`` classification.
+_TEST_DIR_PARTS = {"test", "tests", "__tests__"}
+
+
+def is_test_path(path_value: Any) -> bool:
+    normalized = str(path_value or "").replace("\\", "/").lower()
+    if not normalized:
+        return False
+    parts = normalized.split("/")
+    if any(part in _TEST_DIR_PARTS for part in parts):
+        return True
+    name = parts[-1]
+    stem = name.split(".", 1)[0]
+    return stem.startswith("test_") or stem.endswith("_test") or stem.endswith("_spec") or ".test." in name or ".spec." in name or name.endswith("_test.go")
+
+
+def reuse_candidate_sort_key(symbol: dict[str, Any], centrality: dict[str, Any]) -> tuple[float, int, str, str, int]:
+    path = clean_text(symbol.get("path"))
+    entry = centrality.get(f"module:{path}") if isinstance(centrality, dict) else None
+    try:
+        score = float(entry.get("score")) if isinstance(entry, dict) else 0.0
+    except (TypeError, ValueError):
+        score = 0.0
+    start = (symbol.get("span") or {}).get("start_line")
+    # Most-depended-on first (higher centrality), public before non-public, then a fully deterministic
+    # tie-break (path, name, line) so the candidate set is stable across runs.
+    return (-score, 0 if symbol.get("public") is True else 1, path, clean_text(symbol.get("name")), start if isinstance(start, int) else 0)
+
+
+def build_special_implementations(audit_dir: Path, symbol_index: dict[str, Any], module_graph: dict[str, Any], available: set[str]) -> list[str]:
     license_source = license_status_source(audit_dir, available)
     dependencies_by_file: dict[str, set[str]] = {}
     for edge in module_graph.get("edges", []):
@@ -278,17 +310,36 @@ def build_special_implementations(audit_dir: Path, symbol_index: dict[str, Any],
         source = str(edge.get("source", "")).removeprefix("module:")
         target = str(edge.get("target", ""))
         dependencies_by_file.setdefault(source, set()).add(target)
+    # Decision-grade reuse: EXCLUDE test-file symbols (you reuse production components, not their tests)
+    # and RANK the rest by module centrality, so the fixed cap surfaces the most-depended-on PRODUCTION
+    # components — not whatever symbols happen to sort first in SYMBOL_INDEX (often a test file's classes,
+    # which previously filled the entire cap and left every reuse recommendation empty).
+    file_index = load_optional_json(audit_dir, "FILE_INDEX")
+    test_paths = {clean_text(record.get("path")) for record in file_index.get("records", []) if isinstance(record, dict) and record.get("kind") == "test"}
+    centrality = module_graph.get("centrality") if isinstance(module_graph.get("centrality"), dict) else {}
+    # Reusable-component kinds span languages: function/class/method (Python-style AST units) AND
+    # `export` (the public surface of TS/JS/Go/... modules, the dominant symbol kind in those repos).
+    # Omitting `export` made the reuse layer Python-only — on a TS repo every production component was
+    # invisible and the cap filled with the few Python leaf symbols. `entrypoint` (a runner, e.g.
+    # __main__) is deliberately excluded: you reuse importable components, not how a script is launched.
+    reusable_kinds = {"function", "class", "method", "export"}
+    eligible: list[dict[str, Any]] = []
     for symbol in symbol_index.get("symbols", []):
-        if not isinstance(symbol, dict) or symbol.get("kind") not in {"function", "class", "method"}:
+        if not isinstance(symbol, dict) or symbol.get("kind") not in reusable_kinds:
             continue
         if not has_reachable_evidence(symbol, available):
             continue
-        name = clean_text(symbol.get("name"))
+        if clean_text(symbol.get("path")) in test_paths or is_test_path(symbol.get("path")):
+            continue
+        eligible.append(symbol)
+    eligible.sort(key=lambda symbol: reuse_candidate_sort_key(symbol, centrality))
+    candidates: list[dict[str, Any]] = []
+    for symbol in eligible[:MAX_REUSE_CANDIDATES]:
         path = clean_text(symbol.get("path"))
         candidates.append(
             {
                 "candidate_id": f"reuse-{len(candidates) + 1:06d}",
-                "name": name,
+                "name": clean_text(symbol.get("name")),
                 "kind": "reusable_component",
                 "files": [path],
                 "coupling": "medium" if dependencies_by_file.get(path) else "low",
@@ -299,9 +350,30 @@ def build_special_implementations(audit_dir: Path, symbol_index: dict[str, Any],
                 "evidence_ids": list(symbol["evidence_ids"]),
             }
         )
-        if len(candidates) >= 20:
-            break
-    write_json(audit_dir / ARTIFACT_PATHS["SPECIAL_IMPLEMENTATIONS"], {"schema_version": "1.0", "run_id": load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).get("run_id"), "candidates": candidates, "skipped": not candidates, "skip_reason": None if candidates else "no evidence-backed reusable component candidates"})
+    # Transparency: the cap is a fixed top-N by centrality, so on large repos most eligible components
+    # are NOT shown. Record the full eligible count + a truncation flag (so the artifact never reads as
+    # "this is the complete reusable surface"), and surface a reviewer-facing open question when cut.
+    total_eligible = len(eligible)
+    truncated = total_eligible > len(candidates)
+    write_json(
+        audit_dir / ARTIFACT_PATHS["SPECIAL_IMPLEMENTATIONS"],
+        {
+            "schema_version": "1.0",
+            "run_id": load_json(audit_dir / ARTIFACT_PATHS["RUN_CONFIG"]).get("run_id"),
+            "candidates": candidates,
+            "total_eligible": total_eligible,
+            "truncated": truncated,
+            "skipped": not candidates,
+            "skip_reason": None if candidates else "no evidence-backed reusable component candidates",
+        },
+    )
+    if truncated:
+        return [
+            f"Reuse candidates truncated: showing the top {len(candidates)} of {total_eligible} eligible production "
+            f"components (ranked by module centrality); the remaining {total_eligible - len(candidates)} are omitted "
+            f"from SPECIAL_IMPLEMENTATIONS and REUSE_MAP. Narrow the audit scope or raise the cap to review them."
+        ]
+    return []
 
 
 def changelog_has_decision_marker(repo_path: Path, path_value: str) -> bool:
@@ -356,7 +428,7 @@ def run_synthesis(run_config: dict[str, Any], audit_dir: Path) -> None:
     enrich_architecture(audit_dir, module_graph, symbol_index, surfaces)
     questions = build_feature_catalog(audit_dir, surfaces, symbol_index, file_index, available)
     build_patterns(audit_dir, module_graph, surfaces, available)
-    build_special_implementations(audit_dir, symbol_index, module_graph, available)
+    questions.extend(build_special_implementations(audit_dir, symbol_index, module_graph, available))
     questions.extend(decision_doc_questions(audit_dir))
     write_open_questions(audit_dir, questions)
     if (audit_dir / ARTIFACT_PATHS["GRAPH"]).exists():

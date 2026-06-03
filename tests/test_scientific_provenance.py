@@ -256,6 +256,31 @@ def test_accession_and_citation_claims_without_record_fail_validation(tmp_path: 
     assert any("wiki/science.md scientific claim lacks provenance record or open question" in error for error in result.errors)
 
 
+def test_software_wording_is_not_flagged_as_scientific_claim() -> None:
+    # General-purpose mandate (observed FP on a large agent repo): ordinary software wording — path/
+    # payload/UI "normalization", a random "seed = 42", a "data_path" — must NOT be flagged as an
+    # unprovenanced scientific claim and must not block REPORT.md. Genuine scientific identifiers still flag.
+    from agentic_deep_audit.validate_scientific import validate_scientific_markdown_claims
+
+    software_errors: list[str] = []
+    validate_scientific_markdown_claims(
+        "Expose connection_is_active_matches_ui_status_normalization; payload normalization, seed = 42, data_path config and CPM budget.",
+        set(),
+        "wiki/features/x.md",
+        software_errors,
+    )
+    assert software_errors == [], software_errors
+
+    scientific_errors: list[str] = []
+    validate_scientific_markdown_claims(
+        "Genome build GRCh38; dataset GSE123456; DOI 10.1038/s41586-020-2649-2.",
+        set(),
+        "wiki/features/y.md",
+        scientific_errors,
+    )
+    assert any("scientific claim lacks provenance" in error for error in scientific_errors)
+
+
 def test_cli_scientific_command_wires_outputs(tmp_path: Path) -> None:
     repo = copy_fixture("scientific_data_project", tmp_path)
     config_path = repo / "audit.config.json"

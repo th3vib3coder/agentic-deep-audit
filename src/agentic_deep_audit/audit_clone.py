@@ -590,6 +590,12 @@ def clone_repo(
         "--config", "submodule.recurse=false",
         "--config", "credential.helper=",
         "--config", "http.extraheader=",
+        # core.longpaths lets git write working-tree paths longer than Windows' 260-char MAX_PATH (it
+        # uses the \\?\ extended-length prefix internally). Without it, cloning a repo whose nested
+        # paths + the audit output-dir prefix exceed 260 fails mid-checkout with "Filename too long"
+        # (observed on real repos). Windows-only effect; git accepts-and-ignores it on Linux/macOS.
+        # It does NOT relax core.protectNTFS (reserved names / ADS stay blocked) — safe for untrusted repos.
+        "--config", "core.longpaths=true",
         "--config", hooks_target,
         parsed.clone_url,
         str(clone_path),
@@ -803,6 +809,7 @@ def _engine_primitive_subprocess(
         "--config", "submodule.recurse=false",
         "--config", "credential.helper=",
         "--config", "http.extraheader=",
+        "--config", "core.longpaths=true",
         "--config",
     ]
     option_segment = cmd[2:-2]

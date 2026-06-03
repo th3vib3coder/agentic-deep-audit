@@ -525,6 +525,29 @@ def test_clone_uses_depth_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert argv[argv.index("--depth") + 1] == "1"
 
 
+def test_clone_uses_core_longpaths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows MAX_PATH: clone passes ``core.longpaths=true`` so repos whose nested paths + the audit
+    output-dir prefix exceed 260 chars don't fail checkout with 'Filename too long' (observed on real
+    repos: cpath-ukk/SPARK, nousresearch/hermes-agent). The engine-primitive boundary allowlist must
+    also permit it — otherwise clone_repo raises EnginePrimitiveError before subprocess.run and the
+    clone_call lookup below fails, so this test guards the cmd and the allowlist staying in lockstep."""
+    parsed = _make_parsed()
+    output_dir = tmp_path / "out"
+    audit_dir = output_dir / "audit"
+    output_dir.mkdir()
+    audit_dir.mkdir()
+
+    run_mock = MagicMock(side_effect=_make_subprocess_success())
+    monkeypatch.setattr("subprocess.run", run_mock)
+
+    audit_clone.clone_repo(parsed, output_dir, audit_dir)
+
+    clone_call = run_mock.call_args_list[0]
+    argv = clone_call.args[0]
+    assert "core.longpaths=true" in argv
+    assert argv[argv.index("core.longpaths=true") - 1] == "--config"
+
+
 # --- AC-3 ---------------------------------------------------------------------
 
 
