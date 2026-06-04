@@ -189,3 +189,40 @@ def test_concept_node_evidence_filters_phantom_path_substring(tmp_path: Path) ->
     evidence = feature_nodes[0]["evidence_ids"]
     assert "ev-123456" not in evidence, f"phantom path substring harvested: {evidence}"
     assert "ev-000001" in evidence, evidence
+
+
+def test_dynamic_node_unions_evidence_and_uses_package_kind(tmp_path: Path) -> None:
+    # MINOR (swarm [LOW]/[NIT]): multiple edges to the materialised package:<dynamic> node must UNION their
+    # evidence (not keep only the first edge's), and a package:* target gets artifact_kind "package".
+    module_graph = {
+        "nodes": [
+            {"id": "module:a.py", "type": "module", "path": "a.py", "evidence_ids": ["ev-000001"]},
+            {"id": "module:b.py", "type": "module", "path": "b.py", "evidence_ids": ["ev-000002"]},
+        ],
+        "edges": [
+            {"source": "module:a.py", "target": "package:<dynamic>", "type": "imports",
+             "weight": 0.5, "conditional": True, "dynamic": True, "evidence_ids": ["ev-000001"]},
+            {"source": "module:b.py", "target": "package:<dynamic>", "type": "imports",
+             "weight": 0.5, "conditional": True, "dynamic": True, "evidence_ids": ["ev-000002"]},
+        ],
+        "centrality": {},
+    }
+    nodes: dict = {}
+    edges: dict = {}
+    add_module_and_symbol_nodes(nodes, edges, module_graph, {"symbols": []}, set())
+    dyn = nodes["package:<dynamic>"]
+    assert dyn["evidence_ids"] == ["ev-000001", "ev-000002"], dyn
+    assert dyn.get("artifact_kind") == "package", dyn
+
+
+def test_frontmatter_evidence_helper_is_single_source_of_truth() -> None:
+    # MINOR (swarm [LOW]): the two former byte-duplicate readers now delegate to one shared helper.
+    from agentic_deep_audit.wiki_frontmatter import frontmatter_evidence_ids
+    from agentic_deep_audit.audit_canonical_graph import wiki_frontmatter_evidence_ids
+    from agentic_deep_audit.audit_corpus import trusted_wiki_evidence_ids
+    # body mentions ev-999999 + a slug substring ev-123456; only the DECLARED frontmatter ids are returned.
+    text = '---\nevidence_ids: ["ev-000002", "ev-000001"]\n---\n\n# x\n\nbody ev-999999, slug feat-ev-123456.\n'
+    expected = ["ev-000001", "ev-000002"]
+    assert frontmatter_evidence_ids(text) == expected
+    assert wiki_frontmatter_evidence_ids(text) == expected
+    assert trusted_wiki_evidence_ids(text) == expected

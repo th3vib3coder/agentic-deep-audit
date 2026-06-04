@@ -11,6 +11,7 @@ from .artifact_io import write_json_artifact
 from .audit_graph_renderers import write_graph_renderer_outputs, write_graphify_outputs
 from .limits import FileSizeLimitError, MAX_ARTIFACT_FILE_BYTES, read_json_capped, read_text_auto_capped
 from .models import ARTIFACT_PATHS
+from .wiki_frontmatter import frontmatter_evidence_ids
 
 
 NODE_TYPES = {"repo", "module", "symbol", "feature", "pattern", "risk", "reuse", "artifact"}
@@ -57,29 +58,9 @@ def evidence_from_text(text: str) -> list[str]:
 
 
 def wiki_frontmatter_evidence_ids(text: str) -> list[str]:
-    # FIX-GRAPHVAL (2026-06-03): a wiki page's canonical-graph evidence must come from its DECLARED
-    # frontmatter `evidence_ids` list, NOT a blanket ev-\d{6,} regex over the whole page. A page slug/title
-    # can contain a coincidental "ev-NNNNNN" substring (e.g. a slug truncating "...everywhere" to "...-ev"
-    # plus an 8-digit disambiguation hash -> "ev-28563836", or a symbol name "_ev_123456"), which the blanket
-    # regex harvested as a PHANTOM evidence reference -> "unreachable evidence id" blocker (hermes-agent).
-    # (Mirrors audit_corpus.trusted_wiki_evidence_ids; kept local to avoid a cross-module import cycle.)
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return []
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        if not line.startswith("evidence_ids:"):
-            continue
-        raw_value = line.split(":", 1)[1].strip()
-        try:
-            values = json.loads(raw_value)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(values, list):
-            return []
-        return sorted({str(item) for item in values if isinstance(item, str) and EVIDENCE_RE.fullmatch(item)})
-    return []
+    # Thin delegate to the shared single-source-of-truth helper (was a byte-duplicate of
+    # audit_corpus.trusted_wiki_evidence_ids; swarm-flagged drift risk — now both forward to one impl).
+    return frontmatter_evidence_ids(text)
 
 
 def split_markdown_row(line: str) -> list[str]:
@@ -216,19 +197,23 @@ def add_module_and_symbol_nodes(
         add_node(nodes, node_id, "symbol", str(symbol.get("name") or node_id), evidence_ids, path=symbol.get("path"), kind=symbol.get("kind"))
         if symbol.get("path"):
             add_edge(edges, f"module:{normalize_graph_path(symbol['path'])}", node_id, "contains", evidence_ids)
+    pre_edge_node_ids = set(nodes)
     for edge in module_graph.get("edges", []) if isinstance(module_graph.get("edges"), list) else []:
         if not isinstance(edge, dict) or not edge.get("source") or not edge.get("target"):
             continue
         target = str(edge["target"])
         edge_evidence = [str(item) for item in edge.get("evidence_ids", []) if isinstance(item, str)]
-        # FIX-GRAPHVAL (2026-06-03): a module-graph edge target that never became a node -- notably the
-        # dynamic-import placeholder package:<dynamic> (resolve_import_target returns it for un-resolvable
-        # imports), and any package:* absent from the module-graph node list -- was silently DROPPED by
-        # build_canonical_graph's endpoint filter, making derivations.dropped_edge_count>0 AND the edge
-        # "missing expected" (both validation blockers; hermes-agent). Materialise an artifact node for such
-        # targets so the dynamic/package dependency edge is preserved.
-        if target not in nodes:
-            add_node(nodes, target, "artifact", target, edge_evidence, artifact_kind="dependency")
+        # FIX-GRAPHVAL (2026-06-03; minor hardening 2026-06-04): a module-graph edge target that never became
+        # a node -- notably package:<dynamic> (resolve_import_target returns it for unresolvable/relative
+        # imports) -- was DROPPED by build_canonical_graph's endpoint filter (dropped_edge_count>0 +
+        # missing-expected-edge; hermes-agent). Materialise an artifact node for such SYNTHETIC targets so the
+        # edge is preserved. Test `pre_edge_node_ids` (frozen BEFORE this loop), not the live `nodes`, so
+        # MULTIPLE edges to the same synthetic target UNION their evidence (add_node merges) while real
+        # module/symbol/package nodes are never re-touched. artifact_kind mirrors the resolved-package
+        # convention (a `package:` target -> "package", else "dependency").
+        if target not in pre_edge_node_ids:
+            add_node(nodes, target, "artifact", target, edge_evidence,
+                     artifact_kind="package" if target.startswith("package:") else "dependency")
         add_edge(
             edges,
             str(edge["source"]),

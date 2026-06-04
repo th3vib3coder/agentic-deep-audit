@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sqlite3
@@ -17,6 +16,7 @@ from .limits import FileSizeLimitError, JsonDepthLimitError, MAX_ARTIFACT_FILE_B
 from .mcp_policy import SECRET_PATTERNS, looks_secret, redact_value
 from .models import ARTIFACT_PATHS
 from .audit_wiki import WIKI_SOURCE_KEYS
+from .wiki_frontmatter import frontmatter_evidence_ids
 
 
 TABLES = ["files", "symbols", "evidence", "claims", "graph_nodes", "graph_edges", "wiki_pages"]
@@ -391,23 +391,9 @@ def wiki_type(path: Path) -> str:
 
 
 def trusted_wiki_evidence_ids(text: str) -> list[str]:
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return []
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        if not line.startswith("evidence_ids:"):
-            continue
-        raw_value = line.split(":", 1)[1].strip()
-        try:
-            values = json.loads(raw_value)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(values, list):
-            return []
-        return sorted({str(item) for item in values if isinstance(item, str) and re.fullmatch(r"ev-\d{6,}", item)})
-    return []
+    # Thin delegate to the shared single-source-of-truth helper (was a byte-duplicate of the canonical-graph
+    # reader; swarm-flagged drift risk — now both forward to one impl in wiki_frontmatter).
+    return frontmatter_evidence_ids(text)
 
 
 def populate_wiki(connection: sqlite3.Connection, audit_dir: Path) -> int:
